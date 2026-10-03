@@ -548,6 +548,51 @@ document.addEventListener('DOMContentLoaded', async () => {
   const inputGdriveClientId = document.getElementById('input-gdrive-client-id');
   const btnSaveGdriveClientId = document.getElementById('btn-save-gdrive-client-id');
 
+  const btnLoadDriveUrl = document.getElementById('btn-load-drive-url');
+  const inputDriveUrl = document.getElementById('input-drive-url');
+
+  if (btnLoadDriveUrl && inputDriveUrl) {
+    btnLoadDriveUrl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const rawUrl = inputDriveUrl.value.trim();
+      if (!rawUrl) {
+        showToast('Please paste a Google Drive link', '⚠️');
+        return;
+      }
+
+      // Extract file ID
+      let driveId = null;
+      const matchFile = rawUrl.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+      if (matchFile) driveId = matchFile[1];
+      const matchId = rawUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+      if (matchId) driveId = matchId[1];
+      if (/^[a-zA-Z0-9_-]{20,}$/.test(rawUrl)) driveId = rawUrl;
+
+      if (!driveId) {
+        showToast('Could not find Google Drive File ID', '❌');
+        return;
+      }
+
+      const streamUrl = `/api/drive/stream?fileId=${driveId}`;
+      const title = 'Google Drive Movie';
+
+      syncManager.loadVideoSource(streamUrl, title, 0, true);
+
+      socket.emit('video-action', {
+        type: 'change-source',
+        sourceType: 'drive',
+        src: streamUrl,
+        title: title,
+        currentTime: 0,
+        isPlaying: true,
+        timestamp: Date.now()
+      });
+
+      sheetMediaBackdrop.classList.remove('open');
+      showToast('Streaming Google Drive Video! 🎬', '☁️');
+    });
+  }
+
   const driveManager = new GoogleDriveManager({
     onAuthChange: (isAuthenticated, email) => {
       if (isAuthenticated) {
