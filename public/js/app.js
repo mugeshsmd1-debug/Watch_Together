@@ -549,7 +549,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnSaveGdriveClientId = document.getElementById('btn-save-gdrive-client-id');
 
   const btnLoadDriveUrl = document.getElementById('btn-load-drive-url');
-  const inputDriveUrl = document.getElementById('input-drive-url');
 
   if (btnLoadDriveUrl && inputDriveUrl) {
     btnLoadDriveUrl.addEventListener('click', (e) => {
