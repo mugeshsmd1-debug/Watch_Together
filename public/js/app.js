@@ -1,6 +1,7 @@
 /**
  * WatchTogether — Main Client Application
- * Connects WebRTC calling, video synchronization, chat, floating camera bubbles, and reactions.
+ * Connects WebRTC calling, video synchronization, chat, floating camera bubbles,
+ * auto-hiding cinema mode, and Google Drive streaming.
  */
 document.addEventListener('DOMContentLoaded', async () => {
   // DOM Elements
@@ -20,9 +21,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnLeaveRoom = document.getElementById('btn-leave-room');
   const btnRoomBadge = document.getElementById('btn-room-badge');
   const labelRoomCode = document.getElementById('label-room-code');
+  const btnToggleUi = document.getElementById('btn-toggle-ui');
   const btnShowQr = document.getElementById('btn-show-qr');
 
   // Video & Stage
+  const movieStage = document.getElementById('movie-stage');
   const mainVideo = document.getElementById('main-video');
   const videoOverlay = document.getElementById('video-overlay');
   const videoTitle = document.getElementById('video-title');
@@ -51,6 +54,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const remoteFallback = document.getElementById('remote-fallback');
 
   // Bottom Control Dock
+  const floatingDock = document.getElementById('floating-dock');
   const btnToggleMic = document.getElementById('btn-toggle-mic');
   const iconMicOn = document.getElementById('icon-mic-on');
   const iconMicOff = document.getElementById('icon-mic-off');
@@ -75,6 +79,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const inputLocalVideo = document.getElementById('input-local-video');
   const inputCustomUrl = document.getElementById('input-custom-url');
   const btnLoadUrl = document.getElementById('btn-load-url');
+  const inputDriveUrl = document.getElementById('input-drive-url');
+  const btnLoadDrive = document.getElementById('btn-load-drive');
 
   const sheetInviteBackdrop = document.getElementById('sheet-invite-backdrop');
   const btnCloseInvite = document.getElementById('btn-close-invite');
@@ -92,7 +98,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let currentUser = null;
   let unreadChatCount = 0;
   let isChatOpen = false;
-  let overlayTimeout = null;
+  let hideControlsTimer = null;
 
   // Initialize Socket.io connection
   socket = io({ transports: ['websocket', 'polling'] });
@@ -102,7 +108,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     remoteVideo.srcObject = remoteStream;
     remoteVideo.play().catch(() => {});
     remoteBubble.classList.remove('cam-off');
-    showToast('Friend connected video stream! 📹');
+    showToast('Friend connected video stream! 📹', '🎉');
   });
 
   // Sync Manager Instance
@@ -154,7 +160,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Setup Touch / Pointer Draggable Camera Bubbles
+  // Touch / Pointer Draggable Camera Bubbles
   function makeBubbleDraggable(el) {
     let startX = 0, startY = 0, initialLeft = 0, initialTop = 0;
     let isDragging = false;
@@ -190,7 +196,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       el.style.transition = '';
     };
 
-    // Touch events
     el.addEventListener('touchstart', (e) => {
       onStart(e.touches[0].clientX, e.touches[0].clientY);
     }, { passive: true });
@@ -202,7 +207,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     window.addEventListener('touchend', onEnd);
 
-    // Pointer events
     el.addEventListener('pointerdown', (e) => {
       onStart(e.clientX, e.clientY);
       el.setPointerCapture(e.pointerId);
@@ -224,20 +228,63 @@ document.addEventListener('DOMContentLoaded', async () => {
   makeBubbleDraggable(localBubble);
   makeBubbleDraggable(remoteBubble);
 
-  // Overlay Controls Auto-hide
-  function resetOverlayTimer() {
-    videoOverlay.classList.remove('autohide');
-    clearTimeout(overlayTimeout);
-    if (!mainVideo.paused) {
-      overlayTimeout = setTimeout(() => {
-        videoOverlay.classList.add('autohide');
-      }, 3500);
+  // =================================================================
+  // CINEMA VIEW: AUTO-HIDE CHAT, REACTIONS & CONTROLS DURING PLAYBACK
+  // =================================================================
+  function hideControls() {
+    if (!mainVideo.paused && !isChatOpen && !sheetMediaBackdrop.classList.contains('open') && !sheetInviteBackdrop.classList.contains('open')) {
+      screenRoom.classList.add('controls-hidden');
     }
   }
 
-  mainVideo.addEventListener('play', resetOverlayTimer);
-  mainVideo.addEventListener('pause', resetOverlayTimer);
-  document.getElementById('movie-stage').addEventListener('pointerdown', resetOverlayTimer);
+  function showControls() {
+    screenRoom.classList.remove('controls-hidden');
+    clearTimeout(hideControlsTimer);
+    if (!mainVideo.paused) {
+      hideControlsTimer = setTimeout(hideControls, 3500);
+    }
+  }
+
+  // Auto-hide when playing
+  mainVideo.addEventListener('play', () => {
+    showControls();
+  });
+
+  // Always show controls when paused
+  mainVideo.addEventListener('pause', () => {
+    screenRoom.classList.remove('controls-hidden');
+    clearTimeout(hideControlsTimer);
+  });
+
+  // Tap video stage to reveal or toggle controls
+  movieStage.addEventListener('pointerdown', (e) => {
+    if (screenRoom.classList.contains('controls-hidden')) {
+      e.stopPropagation();
+      showControls();
+    } else {
+      showControls();
+    }
+  });
+
+  // Mouse move / touch activity reveals controls
+  ['pointermove', 'touchstart'].forEach((evt) => {
+    window.addEventListener(evt, () => {
+      if (screenRoom.classList.contains('controls-hidden')) {
+        showControls();
+      }
+    }, { passive: true });
+  });
+
+  // Manual Toggle UI button
+  if (btnToggleUi) {
+    btnToggleUi.addEventListener('click', () => {
+      if (screenRoom.classList.contains('controls-hidden')) {
+        showControls();
+      } else {
+        screenRoom.classList.add('controls-hidden');
+      }
+    });
+  }
 
   // Floating Reaction Generator
   function triggerReaction(emoji) {
@@ -245,7 +292,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     reactionEl.className = 'floating-reaction';
     reactionEl.textContent = emoji;
 
-    // Randomize horizontal spawn position & subtle tilt
     const leftPct = 15 + Math.random() * 70;
     const rotDeg = (Math.random() * 40 - 20) + 'deg';
     reactionEl.style.left = `${leftPct}%`;
@@ -255,7 +301,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     setTimeout(() => reactionEl.remove(), 2900);
   }
 
-  // Quick reactions buttons click
   document.querySelectorAll('.reaction-btn').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -275,11 +320,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     localTagName.textContent = username;
     localFallback.textContent = username.charAt(0).toUpperCase();
 
-    // Switch Screens
     screenHome.classList.add('hidden');
     screenRoom.classList.remove('hidden');
 
-    // Notify server
     socket.emit('join-room', {
       roomId: currentRoomId,
       userName: username
@@ -288,13 +331,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     showToast(`Joined Room ${currentRoomId}`, '🎉');
   }
 
-  // Button Create Room
   btnCreateRoom.addEventListener('click', () => {
     const randomCode = 'WT-' + Math.floor(1000 + Math.random() * 9000);
     joinRoom(randomCode);
   });
 
-  // Button Join Room
   btnJoinRoom.addEventListener('click', () => {
     const code = inputRoomCode.value.trim();
     if (!code) {
@@ -304,50 +345,48 @@ document.addEventListener('DOMContentLoaded', async () => {
     joinRoom(code);
   });
 
-  // Leave Room
   btnLeaveRoom.addEventListener('click', () => {
     if (confirm('Leave this watch room?')) {
       window.location.href = window.location.pathname;
     }
   });
 
-  // Socket: Room Joined (initial room state)
+  // Socket: Room Joined
   socket.on('room-joined', ({ roomId, user, otherUsers, videoState, chatHistory }) => {
     currentUser = user;
     currentRoomId = roomId;
 
-    // Setup video state
     if (videoState) {
       syncManager.loadVideoSource(videoState.src, videoState.title, videoState.currentTime, videoState.isPlaying);
     }
 
-    // Populate existing chat
     if (chatHistory && chatHistory.length > 0) {
       chatMessages.innerHTML = '';
       chatHistory.forEach(appendChatMessage);
     }
 
-    // Connect to other peer if already in room
     if (otherUsers && otherUsers.length > 0) {
       const peer = otherUsers[0];
       remoteTagName.textContent = peer.name;
       remoteFallback.textContent = peer.name.charAt(0).toUpperCase();
 
-      // Initiate WebRTC call with peer
-      console.log('Initiating WebRTC offer to peer:', peer.id);
-      webrtc.createPeerConnection(peer.id, true);
+      // New joiner creates receiver peer connection and awaits offer from established peer
+      console.log('Peer found in room, awaiting offer from:', peer.id);
+      webrtc.createPeerConnection(peer.id, false);
     } else {
       remoteTagName.textContent = 'Waiting for friend...';
     }
   });
 
-  // Socket: User Joined
+  // Socket: User Joined (Trigger WebRTC call from established host/peer)
   socket.on('user-joined', ({ user }) => {
     showToast(`${user.name} joined!`, '👋');
     remoteTagName.textContent = user.name;
     remoteFallback.textContent = user.name.charAt(0).toUpperCase();
 
-    // Answer incoming connection if needed or await offer
+    // Established user initiates the WebRTC offer
+    console.log('Initiating WebRTC offer to new peer:', user.id);
+    webrtc.createPeerConnection(user.id, true);
   });
 
   // Socket: User Left
@@ -373,7 +412,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     webrtc.handleIceCandidate(candidate);
   });
 
-  // Socket: Peer Media State Changed (mic muted / cam off)
+  // Socket: Peer Media State Changed
   socket.on('user-media-state-changed', ({ audioEnabled, videoEnabled }) => {
     if (audioEnabled !== undefined) {
       if (audioEnabled) {
@@ -396,14 +435,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     syncManager.handleSyncAction(action);
   });
 
-  // Socket: Periodic Host Sync Pulse
   socket.on('sync-pulse-echo', (pulse) => {
     if (pulse.senderId !== socket.id) {
       syncManager.handleSyncPulse(pulse);
     }
   });
 
-  // Emit periodic sync pulse if user is playing
   setInterval(() => {
     if (currentRoomId && !mainVideo.paused && currentUser) {
       socket.emit('sync-pulse', {
@@ -446,8 +483,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     appendChatMessage(msg);
   });
 
-  // Socket: Live Reactions
-  socket.on('new-reaction', ({ emoji, senderName }) => {
+  socket.on('new-reaction', ({ emoji }) => {
     triggerReaction(emoji);
   });
 
@@ -489,6 +525,54 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   sheetMediaBackdrop.addEventListener('click', (e) => {
     if (e.target === sheetMediaBackdrop) sheetMediaBackdrop.classList.remove('open');
+  });
+
+  // Helper to extract Google Drive file ID
+  function extractGoogleDriveId(url) {
+    if (!url) return null;
+    const matchFile = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+    if (matchFile) return matchFile[1];
+
+    const matchId = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+    if (matchId) return matchId[1];
+
+    if (/^[a-zA-Z0-9_-]{20,}$/.test(url.trim())) {
+      return url.trim();
+    }
+    return null;
+  }
+
+  // Media: Load Google Drive Movie
+  btnLoadDrive.addEventListener('click', () => {
+    const rawUrl = inputDriveUrl.value.trim();
+    if (!rawUrl) {
+      showToast('Please paste a Google Drive link', '⚠️');
+      return;
+    }
+
+    const driveId = extractGoogleDriveId(rawUrl);
+    if (!driveId) {
+      showToast('Invalid Google Drive link format', '❌');
+      return;
+    }
+
+    const streamUrl = `/api/drive-stream?id=${driveId}`;
+    const title = 'Google Drive Movie';
+
+    syncManager.loadVideoSource(streamUrl, title, 0, true);
+
+    socket.emit('video-action', {
+      type: 'change-source',
+      sourceType: 'drive',
+      src: streamUrl,
+      title: title,
+      currentTime: 0,
+      isPlaying: true,
+      timestamp: Date.now()
+    });
+
+    sheetMediaBackdrop.classList.remove('open');
+    showToast('Streaming Google Drive Video! 🎬', '☁️');
   });
 
   // Media: Preloaded Movies Click

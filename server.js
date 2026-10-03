@@ -11,10 +11,41 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Generate self-signed certificate for local HTTPS (required for iOS Safari getUserMedia)
-const pems = selfsigned.generate([{ name: 'commonName', value: 'WatchTogether Local' }], {
+// Helper to get local IPv4 address
+function getLocalIpAddress() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return 'localhost';
+}
+
+const localIp = getLocalIpAddress();
+
+// Generate Apple-compliant self-signed certificate with SubjectAltName (SAN) for iOS Safari
+const pems = selfsigned.generate([
+  { name: 'commonName', value: localIp }
+], {
   days: 365,
-  algorithm: 'sha256'
+  algorithm: 'sha256',
+  keySize: 2048,
+  extensions: [
+    { name: 'basicConstraints', cA: true },
+    { name: 'keyUsage', keyCertSign: true, digitalSignature: true, nonRepudiation: true, keyEncipherment: true, dataEncipherment: true },
+    { name: 'extKeyUsage', serverAuth: true, clientAuth: true },
+    {
+      name: 'subjectAltName',
+      altNames: [
+        { type: 2, value: 'localhost' },
+        { type: 7, ip: '127.0.0.1' },
+        { type: 7, ip: localIp }
+      ]
+    }
+  ]
 });
 
 const HTTPS_PORT = process.env.HTTPS_PORT || 3000;
@@ -33,21 +64,6 @@ const io = new Server({
 });
 io.attach(httpsServer);
 io.attach(httpServer);
-
-// Helper to get local IPv4 address
-function getLocalIpAddress() {
-  const interfaces = os.networkInterfaces();
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name]) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
-      }
-    }
-  }
-  return 'localhost';
-}
-
-const localIp = getLocalIpAddress();
 
 // In-memory room store
 // roomId -> { users: Map<socketId, { id, name, isHost, audioEnabled, videoEnabled }>, videoState: {...}, chat: [] }
@@ -74,7 +90,7 @@ function getOrCreateRoom(roomId) {
   return rooms.get(roomId);
 }
 
-// REST API for QR code and room metadata
+// REST API for metadata
 app.get('/api/info', (req, res) => {
   res.json({
     localIp,
@@ -85,6 +101,7 @@ app.get('/api/info', (req, res) => {
   });
 });
 
+// QR code generation
 app.get('/api/room-qr/:roomId', async (req, res) => {
   try {
     const roomId = req.params.roomId.toUpperCase();
@@ -100,6 +117,52 @@ app.get('/api/room-qr/:roomId', async (req, res) => {
     res.json({ qrDataUrl, joinUrl });
   } catch (err) {
     res.status(500).json({ error: 'Failed to generate QR code' });
+  }
+});
+
+// Google Drive Video Stream Proxy / Resolver
+app.get('/api/drive-stream', async (req, res) => {
+  const fileId = req.query.id;
+  if (!fileId) return res.status(400).send('Missing file id');
+
+  try {
+    const driveUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+    const initialRes = await fetch(driveUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      },
+      redirect: 'manual'
+    });
+
+    const location = initialRes.headers.get('location');
+    if (location) {
+      return res.redirect(location);
+    }
+
+    // Check if Google Drive returned virus warning confirmation page for large files
+    const html = await initialRes.text();
+    const confirmMatch = html.match(/confirm=([0-9A-Za-z_-]+)/);
+    const confirmToken = confirmMatch ? confirmMatch[1] : '';
+
+    if (confirmToken) {
+      const confirmedUrl = `https://drive.google.com/uc?export=download&confirm=${confirmToken}&id=${fileId}`;
+      const secondRes = await fetch(confirmedUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        },
+        redirect: 'manual'
+      });
+      const confirmedLocation = secondRes.headers.get('location');
+      if (confirmedLocation) {
+        return res.redirect(confirmedLocation);
+      }
+    }
+
+    // Fallback: direct download link
+    res.redirect(`https://drive.google.com/uc?export=download&id=${fileId}`);
+  } catch (err) {
+    console.error('Google drive stream resolver error:', err);
+    res.redirect(`https://drive.google.com/uc?export=download&id=${fileId}`);
   }
 });
 
@@ -148,7 +211,7 @@ io.on('connection', (socket) => {
     console.log(`[Room ${roomId}] User ${userProfile.name} (${socket.id}) joined. Total: ${room.users.size}`);
   });
 
-  // 2. WebRTC Signaling (1-to-1 or peer-to-peer mesh)
+  // 2. WebRTC Signaling (Direct peer routing)
   socket.on('signal-offer', ({ targetId, sdp }) => {
     socket.to(targetId).emit('signal-offer', {
       senderId: socket.id,
@@ -231,7 +294,7 @@ io.on('connection', (socket) => {
     });
   });
 
-  // 5. Periodic Time Sync Pulse (Host or master pulse)
+  // 5. Periodic Time Sync Pulse
   socket.on('sync-pulse', ({ currentTime, isPlaying }) => {
     if (!currentRoomId) return;
     const room = rooms.get(currentRoomId);
@@ -304,7 +367,6 @@ io.on('connection', (socket) => {
       userName: user ? user.name : 'Guest'
     });
 
-    // If host left and peers remain, promote next user to host
     if (user && user.isHost && room.users.size > 0) {
       const nextHostEntry = room.users.entries().next().value;
       if (nextHostEntry) {
@@ -317,7 +379,6 @@ io.on('connection', (socket) => {
       }
     }
 
-    // Clean up empty room after 10 minutes
     if (room.users.size === 0) {
       setTimeout(() => {
         if (room.users.size === 0) {
@@ -334,11 +395,11 @@ httpsServer.listen(HTTPS_PORT, '0.0.0.0', () => {
   console.log(`\n======================================================`);
   console.log(`🎬 WatchTogether Server Running!`);
   console.log(`------------------------------------------------------`);
-  console.log(`🔒 HTTPS (Required for iPhone Camera/Mic):`);
+  console.log(`🔒 HTTPS (For iPhone Camera/Mic with Apple SAN SSL):`);
   console.log(`   ➜ Local:   https://localhost:${HTTPS_PORT}`);
   console.log(`   ➜ iPhone:  https://${localIp}:${HTTPS_PORT}`);
   console.log(`------------------------------------------------------`);
-  console.log(`🌐 HTTP (For Desktop browsers):`);
+  console.log(`🌐 HTTP (Direct network browser access):`);
   console.log(`   ➜ Local:   http://localhost:${HTTP_PORT}`);
   console.log(`   ➜ Network: http://${localIp}:${HTTP_PORT}`);
   console.log(`======================================================\n`);

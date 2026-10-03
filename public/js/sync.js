@@ -139,8 +139,13 @@ class VideoSyncManager {
       });
     }
 
-    // Tap video to toggle controls or play/pause
-    this.video.addEventListener('click', () => {
+    // Tap video: if controls hidden, reveal without pausing; if visible, toggle play
+    this.video.addEventListener('click', (e) => {
+      const screenRoom = document.getElementById('screen-room');
+      if (screenRoom && screenRoom.classList.contains('controls-hidden')) {
+        screenRoom.classList.remove('controls-hidden');
+        return;
+      }
       this.togglePlay();
     });
   }

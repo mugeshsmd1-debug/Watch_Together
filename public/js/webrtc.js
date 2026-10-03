@@ -1,6 +1,7 @@
 /**
  * WebRTC Connection and AV Media Manager
- * Handles local camera/mic stream, peer-to-peer connection, and speaking detection.
+ * Handles local camera/mic stream, peer-to-peer connection with candidate queuing,
+ * transceivers, and speaking detection.
  */
 class WebRTCManager {
   constructor(socket, onRemoteStreamChange) {
@@ -15,13 +16,15 @@ class WebRTCManager {
     this.isCamOff = false;
     this.currentFacing = 'user'; // 'user' or 'environment'
     this.targetPeerId = null;
+    this.iceCandidateQueue = [];
 
-    // WebRTC configuration with Google STUN servers
+    // WebRTC configuration with Google & Mozilla STUN servers
     this.rtcConfig = {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' }
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun.services.mozilla.com' }
       ]
     };
   }
@@ -57,6 +60,7 @@ class WebRTCManager {
         previewElement.play().catch(() => {});
       }
 
+      this.attachLocalTracksToPeer();
       this.setupSpeakingDetector();
       return true;
     } catch (err) {
@@ -65,13 +69,32 @@ class WebRTCManager {
       try {
         this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         this.isCamOff = true;
+        this.attachLocalTracksToPeer();
         this.setupSpeakingDetector();
         return true;
       } catch (audioErr) {
-        console.warn('Audio fallback also failed:', audioErr);
+        console.warn('Audio fallback also failed or blocked:', audioErr);
         return false;
       }
     }
+  }
+
+  attachLocalTracksToPeer() {
+    if (!this.peerConnection || !this.localStream) return;
+
+    const currentSenders = this.peerConnection.getSenders();
+    this.localStream.getTracks().forEach((track) => {
+      const existingSender = currentSenders.find((s) => s.track && s.track.kind === track.kind);
+      if (existingSender) {
+        existingSender.replaceTrack(track).catch(() => {});
+      } else {
+        try {
+          this.peerConnection.addTrack(track, this.localStream);
+        } catch (e) {
+          console.warn('Track already added or failed:', e);
+        }
+      }
+    });
   }
 
   /**
@@ -119,7 +142,7 @@ class WebRTCManager {
 
       checkSpeaking();
     } catch (e) {
-      console.log('AudioContext not allowed or not yet active:', e);
+      console.log('AudioContext not active yet:', e);
     }
   }
 
@@ -128,6 +151,7 @@ class WebRTCManager {
    */
   createPeerConnection(remotePeerId, isInitiator = false) {
     this.targetPeerId = remotePeerId;
+    this.iceCandidateQueue = [];
 
     if (this.peerConnection) {
       this.peerConnection.close();
@@ -135,23 +159,35 @@ class WebRTCManager {
 
     this.peerConnection = new RTCPeerConnection(this.rtcConfig);
 
-    // Add local tracks to connection
-    if (this.localStream) {
-      this.localStream.getTracks().forEach((track) => {
-        this.peerConnection.addTrack(track, this.localStream);
-      });
+    // Add transceivers so SDP always contains audio and video
+    try {
+      this.peerConnection.addTransceiver('audio', { direction: 'sendrecv' });
+      this.peerConnection.addTransceiver('video', { direction: 'sendrecv' });
+    } catch (e) {
+      console.warn('addTransceiver note:', e);
     }
+
+    // Attach local tracks if available
+    this.attachLocalTracksToPeer();
 
     // Handle remote track
     this.peerConnection.ontrack = (event) => {
       console.log('Received remote track:', event.track.kind);
-      this.remoteStream = event.streams[0];
+      if (event.streams && event.streams[0]) {
+        this.remoteStream = event.streams[0];
+      } else {
+        if (!this.remoteStream) {
+          this.remoteStream = new MediaStream();
+        }
+        this.remoteStream.addTrack(event.track);
+      }
+
       if (this.onRemoteStreamChange) {
         this.onRemoteStreamChange(this.remoteStream);
       }
     };
 
-    // ICE Candidates
+    // Send local ICE candidates
     this.peerConnection.onicecandidate = (event) => {
       if (event.candidate) {
         this.socket.emit('signal-ice', {
@@ -162,7 +198,11 @@ class WebRTCManager {
     };
 
     this.peerConnection.onconnectionstatechange = () => {
-      console.log('Peer connection state:', this.peerConnection.connectionState);
+      console.log('WebRTC connection state:', this.peerConnection.connectionState);
+      if (this.peerConnection.connectionState === 'connected') {
+        const remoteBubble = document.getElementById('remote-bubble');
+        if (remoteBubble) remoteBubble.classList.remove('cam-off');
+      }
     };
 
     if (isInitiator) {
@@ -191,6 +231,8 @@ class WebRTCManager {
     this.createPeerConnection(senderId, false);
     try {
       await this.peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+      await this.flushIceCandidateQueue();
+
       const answer = await this.peerConnection.createAnswer();
       await this.peerConnection.setLocalDescription(answer);
 
@@ -207,6 +249,7 @@ class WebRTCManager {
     try {
       if (this.peerConnection) {
         await this.peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+        await this.flushIceCandidateQueue();
       }
     } catch (err) {
       console.error('Error setting remote description:', err);
@@ -215,11 +258,24 @@ class WebRTCManager {
 
   async handleIceCandidate(candidate) {
     try {
-      if (this.peerConnection) {
-        await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+      if (!this.peerConnection || !this.peerConnection.remoteDescription || !this.peerConnection.remoteDescription.type) {
+        this.iceCandidateQueue.push(candidate);
+        return;
       }
+      await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
     } catch (err) {
       console.error('Error adding ICE candidate:', err);
+    }
+  }
+
+  async flushIceCandidateQueue() {
+    while (this.iceCandidateQueue.length > 0) {
+      const candidate = this.iceCandidateQueue.shift();
+      try {
+        await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (err) {
+        console.warn('Failed to flush buffered ICE candidate:', err);
+      }
     }
   }
 
@@ -280,11 +336,9 @@ class WebRTCManager {
 
         if (localVideoElement) {
           localVideoElement.srcObject = this.localStream;
-          // Mirror only if front camera
           localVideoElement.style.transform = (this.currentFacing === 'user') ? 'scaleX(-1)' : 'scaleX(1)';
         }
 
-        // Replace track in active WebRTC peer connection
         if (this.peerConnection) {
           const sender = this.peerConnection.getSenders().find((s) => s.track && s.track.kind === 'video');
           if (sender) {
