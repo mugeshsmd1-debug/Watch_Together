@@ -315,7 +315,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     const username = inputUsername.value.trim() || 'Alex';
     localStorage.setItem('wt_username', username);
 
-    currentRoomId = roomId.toUpperCase();
+    let cleanCode = (roomId || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!cleanCode.startsWith('WT') && /^\d+$/.test(cleanCode)) {
+      cleanCode = 'WT-' + cleanCode;
+    } else if (cleanCode.startsWith('WT') && !cleanCode.startsWith('WT-')) {
+      cleanCode = 'WT-' + cleanCode.substring(2);
+    }
+
+    currentRoomId = cleanCode || 'WT-MAIN';
     labelRoomCode.textContent = currentRoomId;
     localTagName.textContent = username;
     localFallback.textContent = username.charAt(0).toUpperCase();
@@ -527,53 +534,135 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (e.target === sheetMediaBackdrop) sheetMediaBackdrop.classList.remove('open');
   });
 
-  // Helper to extract Google Drive file ID
-  function extractGoogleDriveId(url) {
-    if (!url) return null;
-    const matchFile = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
-    if (matchFile) return matchFile[1];
+  // =================================================================
+  // GOOGLE DRIVE OAUTH & VIDEO PICKER
+  // =================================================================
+  const driveLoggedOut = document.getElementById('drive-logged-out');
+  const driveLoggedIn = document.getElementById('drive-logged-in');
+  const driveStatusDesc = document.getElementById('drive-status-desc');
+  const driveUserEmailLabel = document.getElementById('drive-user-email-label');
+  const btnGoogleSignin = document.getElementById('btn-google-signin');
+  const btnGoogleSignout = document.getElementById('btn-google-signout');
+  const btnBrowseDrive = document.getElementById('btn-browse-drive');
+  const driveFilesContainer = document.getElementById('drive-files-container');
+  const inputGdriveClientId = document.getElementById('input-gdrive-client-id');
+  const btnSaveGdriveClientId = document.getElementById('btn-save-gdrive-client-id');
 
-    const matchId = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
-    if (matchId) return matchId[1];
-
-    if (/^[a-zA-Z0-9_-]{20,}$/.test(url.trim())) {
-      return url.trim();
+  const driveManager = new GoogleDriveManager({
+    onAuthChange: (isAuthenticated, email) => {
+      if (isAuthenticated) {
+        if (driveLoggedOut) driveLoggedOut.style.display = 'none';
+        if (driveLoggedIn) driveLoggedIn.style.display = 'flex';
+        if (driveStatusDesc) driveStatusDesc.textContent = 'Connected to Google Drive';
+        if (email && driveUserEmailLabel) driveUserEmailLabel.textContent = `Signed in as ${email}`;
+        showToast('Google Drive connected! ☁️', '✅');
+      } else {
+        if (driveLoggedOut) driveLoggedOut.style.display = 'flex';
+        if (driveLoggedIn) driveLoggedIn.style.display = 'none';
+        if (driveFilesContainer) driveFilesContainer.style.display = 'none';
+        if (driveStatusDesc) driveStatusDesc.textContent = 'Sign in with your Google account to access your Drive videos';
+        showToast('Signed out of Google Drive', 'ℹ️');
+      }
     }
-    return null;
+  });
+
+  if (driveManager.clientId && inputGdriveClientId) {
+    inputGdriveClientId.value = driveManager.clientId;
   }
 
-  // Media: Load Google Drive Movie
-  btnLoadDrive.addEventListener('click', () => {
-    const rawUrl = inputDriveUrl.value.trim();
-    if (!rawUrl) {
-      showToast('Please paste a Google Drive link', '⚠️');
-      return;
+  if (driveManager.accessToken) {
+    if (driveLoggedOut) driveLoggedOut.style.display = 'none';
+    if (driveLoggedIn) driveLoggedIn.style.display = 'flex';
+    if (driveStatusDesc) driveStatusDesc.textContent = 'Connected to Google Drive';
+    if (driveManager.userEmail && driveUserEmailLabel) {
+      driveUserEmailLabel.textContent = `Signed in as ${driveManager.userEmail}`;
     }
+  }
 
-    const driveId = extractGoogleDriveId(rawUrl);
-    if (!driveId) {
-      showToast('Invalid Google Drive link format', '❌');
-      return;
-    }
-
-    const streamUrl = `/api/drive-stream?id=${driveId}`;
-    const title = 'Google Drive Movie';
-
-    syncManager.loadVideoSource(streamUrl, title, 0, true);
-
-    socket.emit('video-action', {
-      type: 'change-source',
-      sourceType: 'drive',
-      src: streamUrl,
-      title: title,
-      currentTime: 0,
-      isPlaying: true,
-      timestamp: Date.now()
+  if (btnSaveGdriveClientId) {
+    btnSaveGdriveClientId.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = inputGdriveClientId.value.trim();
+      if (!id) {
+        showToast('Please enter a Google Client ID', '⚠️');
+        return;
+      }
+      driveManager.setClientId(id);
+      showToast('Client ID saved! Now tap Sign in with Google', '💾');
     });
+  }
 
-    sheetMediaBackdrop.classList.remove('open');
-    showToast('Streaming Google Drive Video! 🎬', '☁️');
-  });
+  if (btnGoogleSignin) {
+    btnGoogleSignin.addEventListener('click', (e) => {
+      e.stopPropagation();
+      driveManager.signIn();
+    });
+  }
+
+  if (btnGoogleSignout) {
+    btnGoogleSignout.addEventListener('click', (e) => {
+      e.stopPropagation();
+      driveManager.signOut();
+    });
+  }
+
+  if (btnBrowseDrive) {
+    btnBrowseDrive.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      driveFilesContainer.style.display = 'flex';
+      driveFilesContainer.innerHTML = '<div style="font-size:12px; color:var(--text-tertiary); text-align:center; padding:10px;">Loading videos from your Drive...</div>';
+
+      try {
+        const files = await driveManager.listDriveVideos();
+        if (files.length === 0) {
+          driveFilesContainer.innerHTML = '<div style="font-size:12px; color:var(--text-tertiary); text-align:center; padding:10px;">No video files found in your Google Drive.</div>';
+          return;
+        }
+
+        driveFilesContainer.innerHTML = '';
+        files.forEach((file) => {
+          const item = document.createElement('div');
+          item.className = 'media-item-card';
+          item.style.padding = '8px 12px';
+
+          const sizeMB = file.size ? (parseInt(file.size, 10) / (1024 * 1024)).toFixed(1) + ' MB' : '';
+
+          item.innerHTML = `
+            <div class="media-card-info" style="max-width: 75%;">
+              <div class="media-card-title" style="font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">🎬 ${escapeHtml(file.name)}</div>
+              <div class="media-card-desc" style="font-size:11px;">${sizeMB} • Google Drive</div>
+            </div>
+            <button class="btn-primary" style="width:auto; padding:4px 12px; font-size:12px; border-radius:10px;">Play</button>
+          `;
+
+          item.addEventListener('click', () => {
+            const streamUrl = driveManager.getStreamUrl(file.id);
+            const title = file.name;
+
+            syncManager.loadVideoSource(streamUrl, title, 0, true);
+
+            socket.emit('video-action', {
+              type: 'change-source',
+              sourceType: 'drive',
+              src: streamUrl,
+              title: title,
+              currentTime: 0,
+              isPlaying: true,
+              timestamp: Date.now()
+            });
+
+            sheetMediaBackdrop.classList.remove('open');
+            showToast(`Streaming from Drive: ${title}`, '☁️');
+          });
+
+          driveFilesContainer.appendChild(item);
+        });
+      } catch (err) {
+        console.error(err);
+        driveFilesContainer.innerHTML = `<div style="font-size:12px; color:var(--accent-pink); text-align:center; padding:10px;">${escapeHtml(err.message)}</div>`;
+      }
+    });
+  }
 
   // Media: Preloaded Movies Click
   document.querySelectorAll('.media-item-card[data-src]').forEach((card) => {

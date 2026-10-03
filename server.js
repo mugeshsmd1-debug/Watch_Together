@@ -4,6 +4,7 @@ const https = require('https');
 const { Server } = require('socket.io');
 const path = require('path');
 const os = require('os');
+const { Readable } = require('stream');
 const qrcode = require('qrcode');
 const selfsigned = require('selfsigned');
 
@@ -120,49 +121,83 @@ app.get('/api/room-qr/:roomId', async (req, res) => {
   }
 });
 
-// Google Drive Video Stream Proxy / Resolver
-app.get('/api/drive-stream', async (req, res) => {
-  const fileId = req.query.id;
-  if (!fileId) return res.status(400).send('Missing file id');
+// Authenticated Google Drive Stream with HTTP 206 Partial Content Range support
+app.get('/api/drive/stream', async (req, res) => {
+  const fileId = req.query.fileId || req.query.id;
+  const token = req.query.token;
+
+  if (!fileId) return res.status(400).send('Missing fileId');
 
   try {
-    const driveUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
-    const initialRes = await fetch(driveUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      },
-      redirect: 'manual'
+    const googleHeaders = {};
+    if (token) {
+      googleHeaders['Authorization'] = `Bearer ${token}`;
+    }
+    if (req.headers.range) {
+      googleHeaders['Range'] = req.headers.range;
+    }
+
+    const driveUrl = token
+      ? `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`
+      : `https://drive.google.com/uc?export=download&id=${fileId}`;
+
+    const googleRes = await fetch(driveUrl, {
+      headers: googleHeaders
     });
 
-    const location = initialRes.headers.get('location');
-    if (location) {
-      return res.redirect(location);
+    if (!googleRes.ok) {
+      const errText = await googleRes.text();
+      console.error(`Google Drive stream error (${googleRes.status}):`, errText);
+      return res.status(googleRes.status).send(errText);
     }
 
-    // Check if Google Drive returned virus warning confirmation page for large files
-    const html = await initialRes.text();
-    const confirmMatch = html.match(/confirm=([0-9A-Za-z_-]+)/);
-    const confirmToken = confirmMatch ? confirmMatch[1] : '';
+    res.status(googleRes.status);
+    ['content-range', 'content-length', 'content-type', 'accept-ranges'].forEach((h) => {
+      const val = googleRes.headers.get(h);
+      if (val) res.setHeader(h, val);
+    });
 
-    if (confirmToken) {
-      const confirmedUrl = `https://drive.google.com/uc?export=download&confirm=${confirmToken}&id=${fileId}`;
-      const secondRes = await fetch(confirmedUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        },
-        redirect: 'manual'
-      });
-      const confirmedLocation = secondRes.headers.get('location');
-      if (confirmedLocation) {
-        return res.redirect(confirmedLocation);
-      }
+    if (!googleRes.headers.get('accept-ranges')) {
+      res.setHeader('Accept-Ranges', 'bytes');
     }
 
-    // Fallback: direct download link
-    res.redirect(`https://drive.google.com/uc?export=download&id=${fileId}`);
+    const nodeStream = Readable.fromWeb(googleRes.body);
+    nodeStream.pipe(res);
+
+    req.on('close', () => {
+      nodeStream.destroy();
+    });
   } catch (err) {
-    console.error('Google drive stream resolver error:', err);
-    res.redirect(`https://drive.google.com/uc?export=download&id=${fileId}`);
+    console.error('Error streaming from Google Drive:', err);
+    if (!res.headersSent) {
+      res.status(500).send('Failed to stream video from Google Drive');
+    }
+  }
+});
+
+// Google Drive List User Video Files (OAuth 2.0)
+app.get('/api/drive/files', async (req, res) => {
+  const token = req.query.token;
+  if (!token) return res.status(400).json({ error: 'Missing token' });
+
+  try {
+    const listUrl = `https://www.googleapis.com/drive/v3/files?q=mimeType contains 'video/' and trashed = false&fields=files(id, name, mimeType, size, thumbnailLink, createdTime)&orderBy=modifiedTime desc&pageSize=25`;
+    const googleRes = await fetch(listUrl, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    if (!googleRes.ok) {
+      const err = await googleRes.json();
+      return res.status(googleRes.status).json(err);
+    }
+
+    const data = await googleRes.json();
+    res.json(data);
+  } catch (err) {
+    console.error('Error listing Google Drive files:', err);
+    res.status(500).json({ error: 'Failed to list Google Drive files' });
   }
 });
 
@@ -172,7 +207,13 @@ io.on('connection', (socket) => {
 
   // 1. Join Room
   socket.on('join-room', ({ roomId, userName }) => {
-    roomId = roomId.trim().toUpperCase();
+    let cleanCode = (roomId || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!cleanCode.startsWith('WT') && /^\d+$/.test(cleanCode)) {
+      cleanCode = 'WT-' + cleanCode;
+    } else if (cleanCode.startsWith('WT') && !cleanCode.startsWith('WT-')) {
+      cleanCode = 'WT-' + cleanCode.substring(2);
+    }
+    roomId = cleanCode || 'WT-MAIN';
     currentRoomId = roomId;
     socket.join(roomId);
 
