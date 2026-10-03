@@ -100,8 +100,89 @@ document.addEventListener('DOMContentLoaded', async () => {
   let isChatOpen = false;
   let hideControlsTimer = null;
 
-  // Initialize Socket.io connection
-  socket = io({ transports: ['websocket', 'polling'] });
+  // Realtime Bridge: Auto-switches between Supabase Realtime (on Vercel) and Socket.io (locally)
+  class RealtimeBridge {
+    constructor() {
+      this.isVercel = window.location.hostname.includes('vercel.app') || (typeof io === 'undefined');
+      this.listeners = new Map();
+      this.supabaseRoom = null;
+      this.socket = null;
+
+      if (!this.isVercel && typeof io !== 'undefined') {
+        try {
+          this.socket = io({ transports: ['websocket', 'polling'] });
+        } catch (e) {
+          this.isVercel = true;
+        }
+      }
+    }
+
+    initSupabase(roomId, userName) {
+      if (this.supabaseRoom) {
+        this.supabaseRoom.leaveRoom();
+      }
+
+      this.supabaseRoom = new SupabaseRoomManager({
+        userName,
+        onUserJoined: (user) => this.dispatch('user-joined', { user }),
+        onUserLeft: (user) => this.dispatch('user-left', user),
+        onSignalOffer: (data) => this.dispatch('signal-offer', data),
+        onSignalAnswer: (data) => this.dispatch('signal-answer', data),
+        onSignalIce: (data) => this.dispatch('signal-ice', data),
+        onMediaStateChanged: (data) => this.dispatch('user-media-state-changed', data),
+        onVideoSync: (action) => this.dispatch('video-sync', action),
+        onSyncPulse: (pulse) => this.dispatch('sync-pulse-echo', pulse),
+        onNewChat: (msg) => this.dispatch('new-chat', msg),
+        onNewReaction: (reaction) => this.dispatch('new-reaction', reaction)
+      });
+
+      this.supabaseRoom.joinRoom(roomId, userName);
+
+      this.dispatch('room-joined', {
+        roomId,
+        user: { id: this.supabaseRoom.userId, name: userName, isHost: true },
+        otherUsers: []
+      });
+    }
+
+    on(event, callback) {
+      if (this.socket) {
+        this.socket.on(event, callback);
+      }
+      if (!this.listeners.has(event)) {
+        this.listeners.set(event, []);
+      }
+      this.listeners.get(event).push(callback);
+    }
+
+    dispatch(event, payload) {
+      if (this.listeners.has(event)) {
+        this.listeners.get(event).forEach((cb) => cb(payload));
+      }
+    }
+
+    emit(event, payload) {
+      if (this.socket && !this.isVercel) {
+        this.socket.emit(event, payload);
+        return;
+      }
+
+      if (this.supabaseRoom) {
+        if (event === 'join-room') {
+          // Handled via initSupabase
+        } else if (event === 'signal-offer') this.supabaseRoom.sendSignalOffer(payload.targetId, payload.sdp);
+        else if (event === 'signal-answer') this.supabaseRoom.sendSignalAnswer(payload.targetId, payload.sdp);
+        else if (event === 'signal-ice') this.supabaseRoom.sendSignalIce(payload.targetId, payload.candidate);
+        else if (event === 'update-media-state') this.supabaseRoom.sendMediaState(payload.audioEnabled, payload.videoEnabled);
+        else if (event === 'video-action') this.supabaseRoom.sendVideoAction(payload);
+        else if (event === 'sync-pulse') this.supabaseRoom.sendSyncPulse(payload.currentTime, payload.isPlaying);
+        else if (event === 'send-chat') this.supabaseRoom.sendChat(payload.text);
+        else if (event === 'send-reaction') this.supabaseRoom.sendReaction(payload.emoji);
+      }
+    }
+  }
+
+  socket = new RealtimeBridge();
 
   // WebRTC Instance
   webrtc = new WebRTCManager(socket, (remoteStream) => {
@@ -330,10 +411,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     screenHome.classList.add('hidden');
     screenRoom.classList.remove('hidden');
 
-    socket.emit('join-room', {
-      roomId: currentRoomId,
-      userName: username
-    });
+    if (socket.isVercel || typeof io === 'undefined') {
+      socket.initSupabase(currentRoomId, username);
+    } else {
+      socket.emit('join-room', {
+        roomId: currentRoomId,
+        userName: username
+      });
+    }
 
     showToast(`Joined Room ${currentRoomId}`, '🎉');
   }

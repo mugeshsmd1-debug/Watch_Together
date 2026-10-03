@@ -388,8 +388,12 @@
 
   </div>
 
-  <!-- Socket.io Client -->
-  <script src="/socket.io/socket.io.js"></script>
+  <!-- Supabase Realtime for Serverless Vercel Deployment -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="/js/supabase-client.js"></script>
+
+  <!-- Socket.io Client (Local Fallback) -->
+  <script src="/socket.io/socket.io.js" onerror="console.log('Running in serverless/Vercel mode (Supabase Realtime enabled)')"></script>
   <!-- App Scripts -->
   <script src="/js/webrtc.js"></script>
   <script src="/js/sync.js"></script>
