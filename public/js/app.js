@@ -132,10 +132,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         onMediaStateChanged: (data) => this.dispatch('user-media-state-changed', data),
         onVideoSync: (action) => this.dispatch('video-sync', action),
         onSyncPulse: (pulse) => this.dispatch('sync-pulse-echo', pulse),
+        onRequestSync: (senderId) => this.dispatch('request-sync', { senderId }),
         onNewChat: (msg) => this.dispatch('new-chat', msg),
         onNewReaction: (reaction) => this.dispatch('new-reaction', reaction)
       });
 
+      this.id = this.supabaseRoom.userId;
       this.supabaseRoom.joinRoom(roomId, userName);
 
       this.dispatch('room-joined', {
@@ -184,10 +186,45 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   socket = new RealtimeBridge();
 
+  // Autoplay prompt helper
+  let autoplayOverlayPrompt = null;
+  function triggerAutoplayResume() {
+    if (mainVideo && !mainVideo.paused) {
+      mainVideo.play().catch(() => {});
+    }
+    if (remoteVideo && remoteVideo.srcObject) {
+      remoteVideo.play().catch(() => {});
+    }
+    if (autoplayOverlayPrompt) {
+      autoplayOverlayPrompt.remove();
+      autoplayOverlayPrompt = null;
+    }
+  }
+
+  function showAutoplayPrompt() {
+    if (autoplayOverlayPrompt) return;
+    autoplayOverlayPrompt = document.createElement('div');
+    autoplayOverlayPrompt.className = 'autoplay-prompt-banner';
+    autoplayOverlayPrompt.innerHTML = `<span>🔊 Tap to start audio & video sync</span>`;
+    autoplayOverlayPrompt.addEventListener('click', triggerAutoplayResume);
+    document.body.appendChild(autoplayOverlayPrompt);
+  }
+  window.showAutoplayPrompt = showAutoplayPrompt;
+
+  window.addEventListener('click', triggerAutoplayResume, { passive: true });
+  window.addEventListener('touchstart', triggerAutoplayResume, { passive: true });
+
   // WebRTC Instance
   webrtc = new WebRTCManager(socket, (remoteStream) => {
     remoteVideo.srcObject = remoteStream;
-    remoteVideo.play().catch(() => {});
+    remoteVideo.playsInline = true;
+    const playPromise = remoteVideo.play();
+    if (playPromise !== undefined) {
+      playPromise.catch((err) => {
+        console.warn('Autoplay prevented remote video stream:', err);
+        showAutoplayPrompt();
+      });
+    }
     remoteBubble.classList.remove('cam-off');
     showToast('Friend connected video stream! 📹', '🎉');
   });
@@ -476,9 +513,43 @@ document.addEventListener('DOMContentLoaded', async () => {
     remoteTagName.textContent = user.name;
     remoteFallback.textContent = user.name.charAt(0).toUpperCase();
 
-    // Established user initiates the WebRTC offer
-    console.log('Initiating WebRTC offer to new peer:', user.id);
-    webrtc.createPeerConnection(user.id, true);
+    // Polite Peer pattern: peer with smaller ID initiates WebRTC offer
+    const myId = socket.isVercel && socket.supabaseRoom ? socket.supabaseRoom.userId : (socket.id || '');
+    const isInitiator = !myId || !user.id || myId < user.id;
+
+    console.log(`[Peer Joined] ${user.name} (${user.id}). My ID: ${myId}. Am I initiator? ${isInitiator}`);
+    webrtc.createPeerConnection(user.id, isInitiator);
+
+    // If I already have a video loaded or playing, send current movie state to the new peer!
+    if (mainVideo.currentSrc || mainVideo.src) {
+      setTimeout(() => {
+        socket.emit('video-action', {
+          type: 'change-source',
+          sourceType: 'sync',
+          src: mainVideo.currentSrc || mainVideo.src,
+          title: videoTitle.textContent || 'Movie',
+          currentTime: mainVideo.currentTime,
+          isPlaying: !mainVideo.paused,
+          timestamp: Date.now()
+        });
+      }, 500);
+    }
+  });
+
+  // Socket: Request Sync (Peer joined and requested current movie state)
+  socket.on('request-sync', ({ senderId }) => {
+    console.log('Peer requested movie sync:', senderId);
+    if (mainVideo.currentSrc || mainVideo.src) {
+      socket.emit('video-action', {
+        type: 'change-source',
+        sourceType: 'sync',
+        src: mainVideo.currentSrc || mainVideo.src,
+        title: videoTitle.textContent || 'Movie',
+        currentTime: mainVideo.currentTime,
+        isPlaying: !mainVideo.paused,
+        timestamp: Date.now()
+      });
+    }
   });
 
   // Socket: User Left
@@ -524,11 +595,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Socket: Video Sync Actions
   socket.on('video-sync', (action) => {
+    console.log('Handling video-sync action:', action);
+    if (action.type === 'change-source' && action.sourceType === 'local-file') {
+      showToast(`Friend selected local file "${action.title}". Tap "Choose Local Movie File" to select your copy!`, '📁');
+      return;
+    }
     syncManager.handleSyncAction(action);
   });
 
   socket.on('sync-pulse-echo', (pulse) => {
-    if (pulse.senderId !== socket.id) {
+    const myId = socket.isVercel && socket.supabaseRoom ? socket.supabaseRoom.userId : socket.id;
+    if (pulse.senderId !== myId) {
       syncManager.handleSyncPulse(pulse);
     }
   });
@@ -901,13 +978,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     sheetInviteBackdrop.classList.add('open');
 
-    try {
-      const res = await fetch(`/api/room-qr/${currentRoomId}`);
-      const data = await res.json();
-      qrImage.src = data.qrDataUrl;
-      inputRoomUrl.value = data.joinUrl;
-    } catch (err) {
-      console.error('Failed to load QR code:', err);
+    const joinUrl = `${window.location.origin}/?room=${encodeURIComponent(currentRoomId)}`;
+    inputRoomUrl.value = joinUrl;
+    qrImage.src = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(joinUrl)}`;
+
+    if (!socket.isVercel) {
+      try {
+        const res = await fetch(`/api/room-qr/${currentRoomId}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.qrDataUrl) qrImage.src = data.qrDataUrl;
+          if (data.joinUrl) inputRoomUrl.value = data.joinUrl;
+        }
+      } catch (_) {}
     }
   }
 

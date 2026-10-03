@@ -18,14 +18,30 @@ class WebRTCManager {
     this.targetPeerId = null;
     this.iceCandidateQueue = [];
 
-    // WebRTC configuration with Google & Mozilla STUN servers
+    // WebRTC configuration with Google, Cloudflare STUN & Metered OpenRelay TURN servers
     this.rtcConfig = {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun.services.mozilla.com' }
-      ]
+        { urls: 'stun:stun.cloudflare.com:3478' },
+        { urls: 'stun:openrelay.metered.ca:80' },
+        {
+          urls: 'turn:openrelay.metered.ca:80',
+          username: 'openrelay',
+          credential: 'openrelay'
+        },
+        {
+          urls: 'turn:openrelay.metered.ca:443',
+          username: 'openrelay',
+          credential: 'openrelay'
+        },
+        {
+          urls: 'turns:openrelay.metered.ca:443?transport=tcp',
+          username: 'openrelay',
+          credential: 'openrelay'
+        }
+      ],
+      iceCandidatePoolSize: 10
     };
   }
 
@@ -150,11 +166,18 @@ class WebRTCManager {
    * Initialize RTCPeerConnection for a remote peer
    */
   createPeerConnection(remotePeerId, isInitiator = false) {
+    if (this.peerConnection && this.targetPeerId === remotePeerId && (this.peerConnection.connectionState === 'connected' || this.peerConnection.connectionState === 'connecting')) {
+      console.log('Peer connection already established for', remotePeerId);
+      return;
+    }
+
+    if (this.targetPeerId !== remotePeerId) {
+      this.iceCandidateQueue = [];
+    }
     this.targetPeerId = remotePeerId;
-    this.iceCandidateQueue = [];
 
     if (this.peerConnection) {
-      this.peerConnection.close();
+      try { this.peerConnection.close(); } catch (_) {}
     }
 
     this.peerConnection = new RTCPeerConnection(this.rtcConfig);
@@ -199,9 +222,14 @@ class WebRTCManager {
 
     this.peerConnection.onconnectionstatechange = () => {
       console.log('WebRTC connection state:', this.peerConnection.connectionState);
+      const remoteBubble = document.getElementById('remote-bubble');
       if (this.peerConnection.connectionState === 'connected') {
-        const remoteBubble = document.getElementById('remote-bubble');
         if (remoteBubble) remoteBubble.classList.remove('cam-off');
+      } else if (this.peerConnection.connectionState === 'failed') {
+        console.warn('WebRTC connection failed, attempting ICE restart...');
+        if (isInitiator) {
+          this.peerConnection.restartIce();
+        }
       }
     };
 
@@ -257,6 +285,7 @@ class WebRTCManager {
   }
 
   async handleIceCandidate(candidate) {
+    if (!candidate) return;
     try {
       if (!this.peerConnection || !this.peerConnection.remoteDescription || !this.peerConnection.remoteDescription.type) {
         this.iceCandidateQueue.push(candidate);
@@ -264,7 +293,7 @@ class WebRTCManager {
       }
       await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
     } catch (err) {
-      console.error('Error adding ICE candidate:', err);
+      console.warn('Error adding ICE candidate:', err);
     }
   }
 

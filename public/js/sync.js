@@ -266,7 +266,13 @@ class VideoSyncManager {
       if (drift > this.driftThresholdHard) {
         this.video.currentTime = expectedCurrentTime;
       }
-      this.video.play().catch(() => {});
+      const playPromise = this.video.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((err) => {
+          console.warn('Autoplay prevented movie play:', err);
+          if (window.showAutoplayPrompt) window.showAutoplayPrompt();
+        });
+      }
       this.updatePlayPauseUI(true);
       this.flashCenterIndicator('play');
     } else if (action.type === 'pause') {
@@ -332,6 +338,7 @@ class VideoSyncManager {
    * Change movie source (Sample movie, local file object URL, or custom URL)
    */
   loadVideoSource(src, title, startTime = 0, autoPlay = false) {
+    if (!src) return;
     this.video.src = src;
     if (this.ui.videoTitle) {
       this.ui.videoTitle.textContent = title || 'Movie';
@@ -339,14 +346,25 @@ class VideoSyncManager {
     this.video.load();
 
     const onLoaded = () => {
-      this.video.currentTime = startTime;
-      if (autoPlay) {
-        this.video.play().catch(() => {});
+      if (startTime > 0) {
+        this.video.currentTime = startTime;
       }
-      this.video.removeEventListener('loadedmetadata', onLoaded);
+      if (autoPlay) {
+        const playPromise = this.video.play();
+        if (playPromise !== undefined) {
+          playPromise.catch((err) => {
+            console.warn('Autoplay prevented movie play on load:', err);
+            if (window.showAutoplayPrompt) window.showAutoplayPrompt();
+          });
+        }
+      }
     };
 
-    this.video.addEventListener('loadedmetadata', onLoaded);
+    if (this.video.readyState >= 1) {
+      onLoaded();
+    } else {
+      this.video.addEventListener('loadedmetadata', onLoaded, { once: true });
+    }
   }
 
   toggleFullscreen() {

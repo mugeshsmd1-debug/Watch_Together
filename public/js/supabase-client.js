@@ -1,17 +1,19 @@
 /**
  * Supabase Realtime Signaling & Video Synchronization Engine
- * Enables WatchTogether to run fully serverless on Vercel with real-time video sync,
+ * Enables OurScreen to run fully serverless on Vercel with real-time video sync,
  * WebRTC signaling, presence, chat, and reactions.
  */
 class SupabaseRoomManager {
   constructor(options = {}) {
     this.supabaseUrl = options.supabaseUrl || 'https://thjfjhekmqwgtypbhlar.supabase.co';
-    this.supabaseKey = options.supabaseKey || 'sb_publishable_syLrN87RaxCMyUc-3F-N3A_79VI05q0';
+    // Using standard Supabase JWT anon key for universal WebSocket Realtime compatibility
+    this.supabaseKey = options.supabaseKey || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRoamZqaGVrbXF3Z3R5cGJobGFyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA3Njg5OTEsImV4cCI6MjEwNjM0NDk5MX0.pPUJAzMJyPOpVcliiadgCeFWaS-vZOGJWlN0YjUCEa0';
     this.client = null;
     this.channel = null;
     this.currentRoomId = null;
     this.userId = 'user_' + Math.random().toString(36).substring(2, 9);
     this.userName = options.userName || 'Guest';
+    this.knownPeers = new Set();
 
     this.onUserJoined = options.onUserJoined || null;
     this.onUserLeft = options.onUserLeft || null;
@@ -20,6 +22,7 @@ class SupabaseRoomManager {
     this.onSignalIce = options.onSignalIce || null;
     this.onVideoSync = options.onVideoSync || null;
     this.onSyncPulse = options.onSyncPulse || null;
+    this.onRequestSync = options.onRequestSync || null;
     this.onNewChat = options.onNewChat || null;
     this.onNewReaction = options.onNewReaction || null;
     this.onMediaStateChanged = options.onMediaStateChanged || null;
@@ -50,6 +53,7 @@ class SupabaseRoomManager {
 
     if (this.channel) {
       this.channel.unsubscribe();
+      this.knownPeers.clear();
     }
 
     this.currentRoomId = roomId;
@@ -63,40 +67,70 @@ class SupabaseRoomManager {
       }
     });
 
-    // 1. Presence: Peer Join & Leave Tracking
-    this.channel
-      .on('presence', { event: 'join' }, ({ newPresences }) => {
-        if (!newPresences || newPresences.length === 0) return;
-        newPresences.forEach((presence) => {
-          if (presence.userId !== this.userId && this.onUserJoined) {
-            this.onUserJoined({
-              id: presence.userId,
-              name: presence.userName || 'Friend'
-            });
-          }
-        });
-      })
-      .on('presence', { event: 'leave' }, ({ leftPresences }) => {
-        if (!leftPresences || leftPresences.length === 0) return;
-        leftPresences.forEach((presence) => {
-          if (presence.userId !== this.userId && this.onUserLeft) {
-            this.onUserLeft({
-              userId: presence.userId,
-              userName: presence.userName || 'Friend'
-            });
-          }
-        });
-      });
+    const handlePeerPresence = (userId, name) => {
+      if (!userId || userId === this.userId) return;
+      if (!this.knownPeers.has(userId)) {
+        this.knownPeers.add(userId);
+        console.log(`[Supabase Realtime] Discovered peer: ${userId} (${name})`);
+        if (this.onUserJoined) {
+          this.onUserJoined({
+            id: userId,
+            name: name || 'Friend'
+          });
+        }
+      }
+    };
 
-    // 2. WebRTC Signaling Broadcasts
+    // 1. Presence: Handle 'sync' (Existing users already in room when you join)
+    this.channel.on('presence', { event: 'sync' }, () => {
+      const state = this.channel.presenceState();
+      console.log('[Supabase Realtime] Presence state synchronized:', state);
+      Object.keys(state).forEach((key) => {
+        const presences = state[key];
+        if (presences && Array.isArray(presences)) {
+          presences.forEach((p) => {
+            handlePeerPresence(p.userId, p.userName);
+          });
+        }
+      });
+    });
+
+    // 2. Presence: Handle 'join' (New peers joining after you)
+    this.channel.on('presence', { event: 'join' }, ({ newPresences }) => {
+      if (!newPresences || newPresences.length === 0) return;
+      newPresences.forEach((p) => {
+        handlePeerPresence(p.userId, p.userName);
+      });
+    });
+
+    // 3. Presence: Handle 'leave'
+    this.channel.on('presence', { event: 'leave' }, ({ leftPresences }) => {
+      if (!leftPresences || leftPresences.length === 0) return;
+      leftPresences.forEach((p) => {
+        if (p.userId && p.userId !== this.userId) {
+          this.knownPeers.delete(p.userId);
+          console.log(`[Supabase Realtime] Peer left: ${p.userId}`);
+          if (this.onUserLeft) {
+            this.onUserLeft({
+              userId: p.userId,
+              userName: p.userName || 'Friend'
+            });
+          }
+        }
+      });
+    });
+
+    // 4. WebRTC Signaling Broadcasts
     this.channel
       .on('broadcast', { event: 'signal-offer' }, ({ payload }) => {
         if (payload.targetId === this.userId && this.onSignalOffer) {
+          console.log('[Signaling] Received WebRTC offer from:', payload.senderId);
           this.onSignalOffer({ senderId: payload.senderId, sdp: payload.sdp });
         }
       })
       .on('broadcast', { event: 'signal-answer' }, ({ payload }) => {
         if (payload.targetId === this.userId && this.onSignalAnswer) {
+          console.log('[Signaling] Received WebRTC answer from:', payload.senderId);
           this.onSignalAnswer({ senderId: payload.senderId, sdp: payload.sdp });
         }
       })
@@ -111,9 +145,10 @@ class SupabaseRoomManager {
         }
       });
 
-    // 3. Movie Synchronization Broadcasts
+    // 5. Movie Synchronization Broadcasts
     this.channel
       .on('broadcast', { event: 'video-action' }, ({ payload }) => {
+        console.log('[Video Action Received]', payload.type, payload.src || '');
         if (this.onVideoSync) {
           this.onVideoSync(payload);
         }
@@ -122,9 +157,14 @@ class SupabaseRoomManager {
         if (payload.senderId !== this.userId && this.onSyncPulse) {
           this.onSyncPulse(payload);
         }
+      })
+      .on('broadcast', { event: 'request-sync' }, ({ payload }) => {
+        if (payload.senderId !== this.userId && this.onRequestSync) {
+          this.onRequestSync(payload.senderId);
+        }
       });
 
-    // 4. Live Chat & Reactions
+    // 6. Live Chat & Reactions
     this.channel
       .on('broadcast', { event: 'chat' }, ({ payload }) => {
         if (this.onNewChat) {
@@ -146,6 +186,11 @@ class SupabaseRoomManager {
           userName: this.userName,
           onlineAt: new Date().toISOString()
         });
+
+        // Request initial movie state from any existing peer in the room
+        setTimeout(() => {
+          this.sendRequestSync();
+        }, 800);
       }
     });
   }
@@ -153,28 +198,36 @@ class SupabaseRoomManager {
   // Emitters
   sendSignalOffer(targetId, sdp) {
     if (!this.channel) return;
+    const cleanSdp = sdp && sdp.toJSON ? sdp.toJSON() : { type: sdp.type, sdp: sdp.sdp };
     this.channel.send({
       type: 'broadcast',
       event: 'signal-offer',
-      payload: { senderId: this.userId, targetId, sdp }
+      payload: { senderId: this.userId, targetId, sdp: cleanSdp }
     });
   }
 
   sendSignalAnswer(targetId, sdp) {
     if (!this.channel) return;
+    const cleanSdp = sdp && sdp.toJSON ? sdp.toJSON() : { type: sdp.type, sdp: sdp.sdp };
     this.channel.send({
       type: 'broadcast',
       event: 'signal-answer',
-      payload: { senderId: this.userId, targetId, sdp }
+      payload: { senderId: this.userId, targetId, sdp: cleanSdp }
     });
   }
 
   sendSignalIce(targetId, candidate) {
-    if (!this.channel) return;
+    if (!this.channel || !candidate) return;
+    const cleanCandidate = candidate.toJSON ? candidate.toJSON() : {
+      candidate: candidate.candidate,
+      sdpMid: candidate.sdpMid,
+      sdpMLineIndex: candidate.sdpMLineIndex,
+      usernameFragment: candidate.usernameFragment
+    };
     this.channel.send({
       type: 'broadcast',
       event: 'signal-ice',
-      payload: { senderId: this.userId, targetId, candidate }
+      payload: { senderId: this.userId, targetId, candidate: cleanCandidate }
     });
   }
 
@@ -215,6 +268,17 @@ class SupabaseRoomManager {
     });
   }
 
+  sendRequestSync() {
+    if (!this.channel) return;
+    this.channel.send({
+      type: 'broadcast',
+      event: 'request-sync',
+      payload: {
+        senderId: this.userId
+      }
+    });
+  }
+
   sendChat(text) {
     if (!this.channel || !text.trim()) return;
     const msg = {
@@ -225,7 +289,6 @@ class SupabaseRoomManager {
       timestamp: Date.now()
     };
 
-    // Send to others and deliver to self
     this.channel.send({
       type: 'broadcast',
       event: 'chat',
@@ -262,6 +325,7 @@ class SupabaseRoomManager {
       this.channel.untrack();
       this.channel.unsubscribe();
       this.channel = null;
+      this.knownPeers.clear();
     }
   }
 }
