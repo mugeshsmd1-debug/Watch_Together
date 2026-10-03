@@ -129,11 +129,20 @@ app.get('/api/auth/google/config', (req, res) => {
   });
 });
 
-// QR code generation
 app.get('/api/room-qr/:roomId', async (req, res) => {
   try {
-    const roomId = req.params.roomId.toUpperCase();
-    const joinUrl = `https://${localIp}:${HTTPS_PORT}/?room=${roomId}`;
+    const rawHost = req.headers['x-forwarded-host'] || req.headers.host;
+    const protocol = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
+    const baseUrl = rawHost ? `${protocol}://${rawHost}` : `https://${localIp}:${HTTPS_PORT}`;
+    
+    let cleanCode = (req.params.roomId || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!cleanCode.startsWith('WT') && /^\d+$/.test(cleanCode)) {
+      cleanCode = 'WT-' + cleanCode;
+    } else if (cleanCode.startsWith('WT') && !cleanCode.startsWith('WT-')) {
+      cleanCode = 'WT-' + cleanCode.substring(2);
+    }
+    const roomId = cleanCode || 'WT-MAIN';
+    const joinUrl = `${baseUrl}/?room=${roomId}`;
     const qrDataUrl = await qrcode.toDataURL(joinUrl, {
       margin: 1,
       width: 320,
@@ -459,18 +468,26 @@ io.on('connection', (socket) => {
 });
 
 // Start servers
-httpsServer.listen(HTTPS_PORT, '0.0.0.0', () => {
-  console.log(`\n======================================================`);
-  console.log(`🎬 WatchTogether Server Running!`);
-  console.log(`------------------------------------------------------`);
-  console.log(`🔒 HTTPS (For iPhone Camera/Mic with Apple SAN SSL):`);
-  console.log(`   ➜ Local:   https://localhost:${HTTPS_PORT}`);
-  console.log(`   ➜ iPhone:  https://${localIp}:${HTTPS_PORT}`);
-  console.log(`------------------------------------------------------`);
-  console.log(`🌐 HTTP (Direct network browser access):`);
-  console.log(`   ➜ Local:   http://localhost:${HTTP_PORT}`);
-  console.log(`   ➜ Network: http://${localIp}:${HTTP_PORT}`);
-  console.log(`======================================================\n`);
-});
+const CLOUD_PORT = process.env.PORT;
 
-httpServer.listen(HTTP_PORT, '0.0.0.0');
+if (CLOUD_PORT) {
+  httpServer.listen(CLOUD_PORT, '0.0.0.0', () => {
+    console.log(`🎬 WatchTogether Cloud Server running on port ${CLOUD_PORT}`);
+  });
+} else {
+  httpsServer.listen(HTTPS_PORT, '0.0.0.0', () => {
+    console.log(`\n======================================================`);
+    console.log(`🎬 WatchTogether Server Running!`);
+    console.log(`------------------------------------------------------`);
+    console.log(`🔒 HTTPS (For iPhone Camera/Mic with Apple SAN SSL):`);
+    console.log(`   ➜ Local:   https://localhost:${HTTPS_PORT}`);
+    console.log(`   ➜ iPhone:  https://${localIp}:${HTTPS_PORT}`);
+    console.log(`------------------------------------------------------`);
+    console.log(`🌐 HTTP (Direct network browser access):`);
+    console.log(`   ➜ Local:   http://localhost:${HTTP_PORT}`);
+    console.log(`   ➜ Network: http://${localIp}:${HTTP_PORT}`);
+    console.log(`======================================================\n`);
+  });
+
+  httpServer.listen(HTTP_PORT, '0.0.0.0');
+}
