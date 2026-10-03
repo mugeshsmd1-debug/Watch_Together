@@ -1,0 +1,1121 @@
+:root {
+  --bg-primary: #09090c;
+  --bg-card: rgba(26, 26, 34, 0.72);
+  --bg-glass: rgba(30, 30, 42, 0.65);
+  --bg-glass-active: rgba(45, 45, 62, 0.85);
+  --accent-blue: #0a84ff;
+  --accent-purple: #bf5af2;
+  --accent-pink: #ff375f;
+  --accent-green: #30d158;
+  --accent-orange: #ff9f0a;
+  --text-primary: #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.65);
+  --text-tertiary: rgba(255, 255, 255, 0.4);
+  --border-glass: rgba(255, 255, 255, 0.12);
+  --border-highlight: rgba(255, 255, 255, 0.22);
+  --shadow-lg: 0 20px 40px -15px rgba(0, 0, 0, 0.7), 0 0 1px rgba(255, 255, 255, 0.2);
+  --shadow-dock: 0 16px 36px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.15);
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+  min-height: -webkit-fill-available;
+  overflow: hidden;
+  position: fixed;
+  width: 100%;
+  height: 100%;
+}
+
+/* Base App Wrapper */
+#app {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Toast Container (iOS Dynamic Island Style) */
+#toast-container {
+  position: fixed;
+  top: calc(var(--safe-top) + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+  width: 90%;
+  max-width: 360px;
+}
+
+.toast {
+  background: rgba(18, 18, 24, 0.85);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--border-glass);
+  color: #fff;
+  padding: 10px 18px;
+  border-radius: 24px;
+  font-size: 13.5px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  animation: toastIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  pointer-events: auto;
+}
+
+.toast.fade-out {
+  animation: toastOut 0.25s forwards;
+}
+
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(-16px) scale(0.92); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes toastOut {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(-12px) scale(0.94); }
+}
+
+/* SCREEN 1: HOME & SETUP SCREEN */
+#screen-home {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: calc(var(--safe-top) + 24px) 20px calc(var(--safe-bottom) + 24px);
+  background: radial-gradient(circle at 50% 10%, rgba(99, 102, 241, 0.15), transparent 60%),
+              radial-gradient(circle at 80% 80%, rgba(236, 72, 153, 0.12), transparent 50%),
+              var(--bg-primary);
+  z-index: 10;
+  transition: opacity 0.35s ease, transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+#screen-home.hidden {
+  opacity: 0;
+  transform: scale(0.96);
+  pointer-events: none;
+}
+
+.home-container {
+  width: 100%;
+  max-width: 440px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.brand-header {
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+.brand-logo-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #0a84ff, #bf5af2);
+  box-shadow: 0 12px 28px rgba(10, 132, 255, 0.35);
+  margin-bottom: 12px;
+}
+
+.brand-logo-badge svg {
+  width: 32px;
+  height: 32px;
+  fill: #ffffff;
+}
+
+.brand-title {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  background: linear-gradient(180deg, #ffffff, #d1d5db);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.brand-subtitle {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+/* Glass Card */
+.glass-card {
+  background: var(--bg-card);
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+  border: 1px solid var(--border-glass);
+  border-radius: 24px;
+  padding: 22px;
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.card-title {
+  font-size: 16px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #fff;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding-left: 2px;
+}
+
+.ios-input {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border-glass);
+  border-radius: 14px;
+  padding: 12px 14px;
+  color: #fff;
+  font-size: 15px;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  user-select: text;
+}
+
+.ios-input:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.25);
+}
+
+.ios-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.room-code-input {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+/* iOS Primary Buttons */
+.btn-primary {
+  width: 100%;
+  background: linear-gradient(135deg, #0a84ff, #0066cc);
+  color: #ffffff;
+  border: none;
+  border-radius: 14px;
+  padding: 13px 18px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-shadow: 0 4px 14px rgba(10, 132, 255, 0.35);
+  transition: transform 0.1s, opacity 0.15s, box-shadow 0.15s;
+}
+
+.btn-primary:active {
+  transform: scale(0.97);
+  opacity: 0.9;
+}
+
+.btn-secondary {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  border: 1px solid var(--border-glass);
+  border-radius: 14px;
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: background 0.2s;
+}
+
+.btn-secondary:active {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.divider-row {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.divider-row::before,
+.divider-row::after {
+  content: '';
+  flex: 1;
+  border-bottom: 1px solid var(--border-glass);
+}
+
+/* Camera Preview Card */
+.preview-box {
+  width: 100%;
+  height: 120px;
+  background: #000;
+  border-radius: 14px;
+  overflow: hidden;
+  position: relative;
+  border: 1px solid var(--border-glass);
+}
+
+#preview-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+
+.preview-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  color: var(--text-secondary);
+  font-size: 12px;
+  gap: 6px;
+}
+
+/* SCREEN 2: WATCH ROOM SCREEN */
+#screen-room {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background-color: #000000;
+  z-index: 20;
+  transition: opacity 0.3s ease;
+}
+
+#screen-room.hidden {
+  display: none;
+}
+
+/* Top Navigation Bar */
+.room-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: calc(var(--safe-top) + 54px);
+  padding: var(--safe-top) 16px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  z-index: 100;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.4) 60%, transparent 100%);
+  pointer-events: none;
+}
+
+.room-header > * {
+  pointer-events: auto;
+}
+
+.header-left, .header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.icon-button {
+  background: rgba(30, 30, 40, 0.7);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border-glass);
+  color: #fff;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.1s, background 0.2s;
+}
+
+.icon-button:active {
+  transform: scale(0.92);
+  background: rgba(50, 50, 65, 0.9);
+}
+
+.room-badge {
+  background: rgba(30, 30, 40, 0.7);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border-glass);
+  border-radius: 20px;
+  padding: 6px 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.room-badge:active {
+  transform: scale(0.96);
+}
+
+.room-code-tag {
+  color: var(--accent-blue);
+  font-family: ui-monospace, Menlo, monospace;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.sync-status-pill {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: rgba(48, 209, 88, 0.15);
+  border: 1px solid rgba(48, 209, 88, 0.3);
+  color: var(--accent-green);
+}
+
+.sync-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-green);
+  box-shadow: 0 0 6px var(--accent-green);
+}
+
+/* VIDEO STAGE */
+.movie-stage {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  position: relative;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+#main-video {
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  background: #000;
+  cursor: pointer;
+}
+
+/* Player Custom Controls Overlay */
+.video-overlay-controls {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 16px 16px calc(var(--safe-bottom) + 80px);
+  background: linear-gradient(0deg, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.3) 40%, transparent 80%);
+  opacity: 1;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+  z-index: 30;
+}
+
+.video-overlay-controls.autohide {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.video-overlay-controls > * {
+  pointer-events: auto;
+}
+
+/* Center Big Play/Pause Splash */
+.center-play-indicator {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s, transform 0.2s;
+  pointer-events: none;
+  z-index: 35;
+}
+
+.center-play-indicator.show {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1.1);
+}
+
+.video-info-banner {
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.video-title-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffffff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 70%;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+}
+
+.video-controls-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+/* Progress Scrubber */
+.progress-container {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.time-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  min-width: 42px;
+}
+
+.progress-track {
+  flex: 1;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 3px;
+  position: relative;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.progress-buffer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.4);
+  border-radius: 3px;
+  width: 0%;
+}
+
+.progress-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
+  border-radius: 3px;
+  width: 0%;
+}
+
+.progress-scrubber-handle {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+  left: 0%;
+  pointer-events: none;
+  transition: transform 0.1s;
+}
+
+.progress-track:active .progress-scrubber-handle {
+  transform: translate(-50%, -50%) scale(1.3);
+}
+
+.btn-ctrl {
+  background: transparent;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border-radius: 50%;
+  transition: transform 0.1s;
+}
+
+.btn-ctrl:active {
+  transform: scale(0.85);
+}
+
+.btn-ctrl svg {
+  width: 22px;
+  height: 22px;
+  fill: currentColor;
+}
+
+/* FLOATING CAMERA BUBBLES */
+.camera-bubble {
+  position: absolute;
+  width: 105px;
+  height: 145px;
+  border-radius: 20px;
+  overflow: hidden;
+  background: #111;
+  border: 1.5px solid var(--border-glass);
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.7);
+  z-index: 50;
+  touch-action: none;
+  cursor: grab;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.camera-bubble:active {
+  cursor: grabbing;
+}
+
+.camera-bubble.speaking {
+  border-color: var(--accent-green);
+  box-shadow: 0 0 18px rgba(48, 209, 88, 0.55), 0 10px 25px rgba(0, 0, 0, 0.7);
+}
+
+.camera-bubble-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #1a1a24;
+}
+
+#local-bubble .camera-bubble-video {
+  transform: scaleX(-1);
+}
+
+.camera-avatar-fallback {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: #242434;
+  color: #fff;
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.camera-bubble.cam-off .camera-avatar-fallback {
+  display: flex;
+}
+
+.camera-bubble.cam-off .camera-bubble-video {
+  display: none;
+}
+
+.bubble-tag {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  right: 6px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-radius: 8px;
+  padding: 3px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.bubble-mute-icon {
+  display: none;
+  width: 10px;
+  height: 10px;
+  fill: var(--accent-pink);
+}
+
+.camera-bubble.mic-muted .bubble-mute-icon {
+  display: inline-block;
+}
+
+/* Initial positions for camera bubbles */
+#local-bubble {
+  top: calc(var(--safe-top) + 65px);
+  right: 14px;
+}
+
+#remote-bubble {
+  top: calc(var(--safe-top) + 225px);
+  right: 14px;
+}
+
+/* FLOATING REACTION EMOJIS (Particle Physics Canvas) */
+#reactions-container {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 60;
+  overflow: hidden;
+}
+
+.floating-reaction {
+  position: absolute;
+  font-size: 32px;
+  bottom: 80px;
+  animation: floatUp 2.8s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+@keyframes floatUp {
+  0% {
+    transform: translateY(0) scale(0.6) rotate(0deg);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+    transform: translateY(-40px) scale(1.2) rotate(var(--rot, 0deg));
+  }
+  80% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: translateY(-420px) scale(1) rotate(calc(var(--rot, 0deg) * 1.5));
+    opacity: 0;
+  }
+}
+
+/* BOTTOM CONTROL DOCK (iOS Floating Bar) */
+.floating-dock {
+  position: absolute;
+  bottom: calc(var(--safe-bottom) + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-glass);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  border: 1px solid var(--border-glass);
+  border-radius: 36px;
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: var(--shadow-dock);
+  z-index: 70;
+  max-width: 95%;
+}
+
+.dock-btn {
+  background: transparent;
+  border: none;
+  color: #ffffff;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  cursor: pointer;
+  transition: transform 0.1s, background 0.2s;
+}
+
+.dock-btn:active {
+  transform: scale(0.9);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.dock-btn svg {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+}
+
+.dock-btn.danger {
+  background: rgba(255, 55, 95, 0.25);
+  color: var(--accent-pink);
+}
+
+.dock-btn.active-glow {
+  background: rgba(10, 132, 255, 0.25);
+  color: var(--accent-blue);
+}
+
+.dock-separator {
+  width: 1px;
+  height: 24px;
+  background: var(--border-glass);
+}
+
+.badge-counter {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: var(--accent-pink);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+}
+
+.badge-counter.active {
+  display: flex;
+}
+
+/* Quick Reaction Bar in Dock */
+.reaction-quick-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.reaction-btn {
+  background: transparent;
+  border: none;
+  font-size: 20px;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border-radius: 50%;
+  transition: transform 0.12s;
+}
+
+.reaction-btn:active {
+  transform: scale(1.4);
+}
+
+/* MODALS & DRAWERS (iOS Sheet Style) */
+.ios-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 1000;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.ios-sheet-backdrop.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.ios-sheet {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  max-width: 520px;
+  margin: 0 auto;
+  background: rgba(22, 22, 30, 0.94);
+  backdrop-filter: blur(36px);
+  -webkit-backdrop-filter: blur(36px);
+  border: 1px solid var(--border-glass);
+  border-bottom: none;
+  border-radius: 28px 28px 0 0;
+  padding: 12px 18px calc(var(--safe-bottom) + 18px);
+  transform: translateY(100%);
+  transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  flex-direction: column;
+  max-height: 85vh;
+}
+
+.ios-sheet-backdrop.open .ios-sheet {
+  transform: translateY(0);
+}
+
+.sheet-grabber {
+  width: 36px;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.25);
+  margin: 0 auto 12px;
+}
+
+.sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.sheet-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.sheet-close-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: var(--text-secondary);
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+/* CHAT SHEET */
+.chat-messages-box {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+  min-height: 220px;
+  max-height: 380px;
+  margin-bottom: 12px;
+}
+
+.chat-bubble {
+  max-width: 80%;
+  padding: 8px 14px;
+  border-radius: 18px;
+  font-size: 14px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.chat-bubble.mine {
+  align-self: flex-end;
+  background: var(--accent-blue);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+
+.chat-bubble.theirs {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  border-bottom-left-radius: 4px;
+}
+
+.chat-meta {
+  font-size: 11px;
+  opacity: 0.65;
+  margin-bottom: 2px;
+  font-weight: 500;
+}
+
+.chat-input-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-input-field {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border-glass);
+  border-radius: 20px;
+  padding: 10px 16px;
+  color: #fff;
+  font-size: 14px;
+  outline: none;
+  user-select: text;
+}
+
+.chat-input-field:focus {
+  border-color: var(--accent-blue);
+}
+
+.chat-send-btn {
+  background: var(--accent-blue);
+  border: none;
+  color: #fff;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+/* MEDIA SELECTOR SHEET */
+.media-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 55vh;
+  overflow-y: auto;
+}
+
+.media-item-card {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-glass);
+  border-radius: 16px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+}
+
+.media-item-card:active {
+  transform: scale(0.98);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.media-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.media-card-title {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.media-card-desc {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+/* QR Code & Share Sheet */
+.qr-display-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 0 16px;
+}
+
+#qr-image {
+  width: 200px;
+  height: 200px;
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 10px;
+}
+
+.qr-tip {
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-align: center;
+  max-width: 280px;
+}
+
+.link-copy-container {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 8px;
+}
+
+/* Responsive adjust for mobile */
+@media (max-width: 600px) {
+  .camera-bubble {
+    width: 86px;
+    height: 120px;
+    border-radius: 16px;
+  }
+  .floating-dock {
+    padding: 4px 6px;
+    gap: 4px;
+  }
+  .dock-btn {
+    width: 38px;
+    height: 38px;
+  }
+  .reaction-btn {
+    font-size: 17px;
+    width: 28px;
+    height: 28px;
+  }
+}
