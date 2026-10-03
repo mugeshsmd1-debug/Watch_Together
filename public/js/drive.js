@@ -1,7 +1,7 @@
 /**
  * Google Drive Authentication & Video Picker Manager
- * Authenticates users with Google OAuth 2.0, lists their Drive video files,
- * and streams them with Range support.
+ * Fetches application OAuth configuration from server, enables 1-click Google Sign-in,
+ * lists user Drive videos, and streams them with HTTP Range support.
  */
 class GoogleDriveManager {
   constructor(options = {}) {
@@ -11,6 +11,21 @@ class GoogleDriveManager {
     this.userEmail = localStorage.getItem('wt_gdrive_user_email') || null;
     this.onVideoSelected = options.onVideoSelected || null;
     this.onAuthChange = options.onAuthChange || null;
+
+    this.fetchServerConfig();
+  }
+
+  async fetchServerConfig() {
+    try {
+      const res = await fetch('/api/auth/google/config');
+      if (res.ok) {
+        const config = await res.json();
+        if (config.clientId && !this.clientId) {
+          this.clientId = config.clientId;
+          localStorage.setItem('wt_gdrive_client_id', this.clientId);
+        }
+      }
+    } catch (_) {}
 
     this.initTokenClient();
   }
@@ -24,7 +39,7 @@ class GoogleDriveManager {
   initTokenClient() {
     if (!this.clientId) return;
     if (typeof google === 'undefined' || !google.accounts || !google.accounts.oauth2) {
-      setTimeout(() => this.initTokenClient(), 500);
+      setTimeout(() => this.initTokenClient(), 400);
       return;
     }
 
@@ -68,8 +83,14 @@ class GoogleDriveManager {
 
   signIn() {
     if (!this.clientId) {
-      alert('Please enter your Google Cloud OAuth Client ID first.');
-      return;
+      const details = document.querySelector('details');
+      if (details) details.open = true;
+      const input = document.getElementById('input-gdrive-client-id');
+      if (input) {
+        input.focus();
+        input.scrollIntoView({ behavior: 'smooth' });
+      }
+      return false;
     }
 
     if (!this.tokenClient) {
@@ -77,10 +98,10 @@ class GoogleDriveManager {
     }
 
     if (this.tokenClient) {
-      this.tokenClient.requestAccessToken({ prompt: 'consent' });
-    } else {
-      alert('Google Identity Services is still loading, please try again in a moment.');
+      this.tokenClient.requestAccessToken({ prompt: '' });
+      return true;
     }
+    return false;
   }
 
   signOut() {

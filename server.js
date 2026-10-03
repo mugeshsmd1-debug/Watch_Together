@@ -4,9 +4,29 @@ const https = require('https');
 const { Server } = require('socket.io');
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
 const { Readable } = require('stream');
 const qrcode = require('qrcode');
 const selfsigned = require('selfsigned');
+
+// Load environment variables from .env file
+const envPath = path.join(__dirname, '.env');
+if (fs.existsSync(envPath)) {
+  const envContent = fs.readFileSync(envPath, 'utf8');
+  envContent.split(/\r?\n/).forEach((line) => {
+    const trimmed = line.trim();
+    if (trimmed && !trimmed.startsWith('#')) {
+      const idx = trimmed.indexOf('=');
+      if (idx !== -1) {
+        const key = trimmed.substring(0, idx).trim();
+        const val = trimmed.substring(idx + 1).trim().replace(/^["']|["']$/g, '');
+        if (key && !process.env[key]) {
+          process.env[key] = val;
+        }
+      }
+    }
+  });
+}
 
 const app = express();
 app.use(express.json());
@@ -99,6 +119,13 @@ app.get('/api/info', (req, res) => {
     httpPort: HTTP_PORT,
     httpsUrl: `https://${localIp}:${HTTPS_PORT}`,
     httpUrl: `http://${localIp}:${HTTP_PORT}`
+  });
+});
+
+// Google OAuth Client Configuration for seamless sign-in
+app.get('/api/auth/google/config', (req, res) => {
+  res.json({
+    clientId: process.env.GOOGLE_CLIENT_ID || ''
   });
 });
 
