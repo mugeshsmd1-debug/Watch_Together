@@ -1,4 +1,4 @@
-# 🎬 WatchTogether
+# 🎬 OurScreen
 
 A native-feel, mobile-first Progressive Web App (PWA) designed to stream movies in sync with real-time peer-to-peer video calls, floating camera bubbles, live text chat, and animated emoji reactions.
 
@@ -61,4 +61,4 @@ The server automatically spins up both:
    - Tap **"Show Details"** (or **"Advanced"**).
    - Tap **"visit this website"** / **"Proceed"**.
 4. Tap **"Allow"** when Safari prompts for Camera and Microphone access.
-5. *(Optional)* Tap the Safari **Share icon** ➔ **"Add to Home Screen"** to run WatchTogether as a standalone fullscreen app!
+5. *(Optional)* Tap the Safari **Share icon** ➔ **"Add to Home Screen"** to run OurScreen as a standalone fullscreen app!

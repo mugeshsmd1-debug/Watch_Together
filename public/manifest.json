@@ -1,6 +1,6 @@
 {
-  "name": "WatchTogether",
-  "short_name": "WatchTogether",
+  "name": "OurScreen",
+  "short_name": "OurScreen",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0a0a0c",
