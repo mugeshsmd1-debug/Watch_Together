@@ -4,36 +4,25 @@
  * Allows anyone to toggle camera & microphone anytime with real-time visibility across peers.
  */
 
-function preferH264(sdp) {
-  if (!sdp || typeof sdp !== 'string') return sdp;
-  const lines = sdp.split('\r\n');
-  const mVideoIndex = lines.findIndex((l) => l.startsWith('m=video'));
-  if (mVideoIndex === -1) return sdp;
-
-  const mVideoLine = lines[mVideoIndex];
-  const parts = mVideoLine.split(' ');
-  const header = parts.slice(0, 3);
-  const pts = parts.slice(3);
-
-  const h264Pts = [];
-  const otherPts = [];
-
-  pts.forEach((pt) => {
-    const isH264 = lines.some((l) =>
-      l.toLowerCase().includes(`a=rtpmap:${pt} h264/90000`)
-    );
-    if (isH264) {
-      h264Pts.push(pt);
-    } else {
-      otherPts.push(pt);
-    }
-  });
-
-  if (h264Pts.length > 0) {
-    lines[mVideoIndex] = `${header.join(' ')} ${[...h264Pts, ...otherPts].join(' ')}`;
-    return lines.join('\r\n');
+// Helper to set codec preferences via native W3C WebRTC API without corrupting SDP
+function setTransceiverCodecPreferences(pc) {
+  if (typeof RTCRtpReceiver !== 'undefined' && RTCRtpReceiver.getCapabilities) {
+    try {
+      const caps = RTCRtpReceiver.getCapabilities('video');
+      if (caps && caps.codecs) {
+        const h264 = caps.codecs.filter((c) => c.mimeType && c.mimeType.toLowerCase() === 'video/h264');
+        const others = caps.codecs.filter((c) => !c.mimeType || c.mimeType.toLowerCase() !== 'video/h264');
+        if (h264.length > 0) {
+          const preferred = [...h264, ...others];
+          pc.getTransceivers().forEach((t) => {
+            if (t.setCodecPreferences && t.sender && t.sender.track && t.sender.track.kind === 'video') {
+              try { t.setCodecPreferences(preferred); } catch (_) {}
+            }
+          });
+        }
+      }
+    } catch (_) {}
   }
-  return sdp;
 }
 
 class WebRTCManager {
