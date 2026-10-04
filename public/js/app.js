@@ -714,9 +714,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     showToast(isAudioActive ? 'Microphone On 🎙️' : 'Microphone Muted 🔇');
   });
 
-  // Dock: Toggle Cam
-  btnToggleCam.addEventListener('click', () => {
-    const isVideoActive = webrtc.toggleVideo();
+  // Dock: Toggle Cam (WhatsApp / Instagram style on/off)
+  btnToggleCam.addEventListener('click', async () => {
+    const isVideoActive = await webrtc.toggleVideo(localVideo);
     iconCamOn.style.display = isVideoActive ? 'block' : 'none';
     iconCamOff.style.display = isVideoActive ? 'none' : 'block';
     btnToggleCam.classList.toggle('danger', !isVideoActive);
