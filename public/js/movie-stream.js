@@ -691,6 +691,11 @@ class MovieStreamManager {
     this.isStreamer = false;
     this.isWatching = false;
 
+    if (this.captureCanvasCleanup) {
+      try { this.captureCanvasCleanup(); } catch (_) {}
+      this.captureCanvasCleanup = null;
+    }
+
     if (this.localMovieStream) {
       this.localMovieStream.getTracks().forEach((track) => track.stop());
       this.localMovieStream = null;
