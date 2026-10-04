@@ -29,7 +29,7 @@ import {
   Send,
   Radio,
 } from "lucide-react";
-import { supabase, WatchRoom, WatchMessage } from "@/lib/supabase";
+import { supabase, WatchRoom, WatchMessage } from "../../../lib/supabase";
 
 interface Participant {
   id: string;

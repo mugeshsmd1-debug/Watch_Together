@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Film, Play, Users, Sparkles, Plus, ArrowRight, Share2, Smartphone, Monitor, Video, ShieldCheck, Heart } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import { supabase } from "../lib/supabase";
 
 export default function HomePage() {
   const router = useRouter();
