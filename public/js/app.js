@@ -971,8 +971,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   if (btnStandbySampleMovie) {
-    btnStandbySampleMovie.addEventListener('click', () => {
-      sheetMediaBackdrop.classList.add('open');
+    btnStandbySampleMovie.addEventListener('click', async () => {
+      showToast('Starting sample movie stream... 🍿', '🎬');
+      await movieStream.startSampleStream(activePeerId);
     });
   }
 
