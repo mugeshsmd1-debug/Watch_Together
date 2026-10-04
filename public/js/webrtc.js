@@ -1,7 +1,7 @@
 /**
  * WebRTC Connection and AV Media Manager
- * Handles local camera/mic stream, peer-to-peer connection with candidate queuing,
- * transceivers, and speaking detection.
+ * WhatsApp / Instagram Style Two-Way Video Call
+ * Allows anyone to toggle camera & microphone anytime with real-time visibility across peers.
  */
 class WebRTCManager {
   constructor(socket, onRemoteStreamChange) {
@@ -18,7 +18,7 @@ class WebRTCManager {
     this.targetPeerId = null;
     this.iceCandidateQueue = [];
 
-    // WebRTC configuration with Google, Cloudflare & Mozilla STUN & Metered OpenRelay TURN servers
+    // Comprehensive STUN / TURN servers for high reliability across mobile networks & firewalls
     this.rtcConfig = {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -67,6 +67,7 @@ class WebRTCManager {
       };
 
       this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+      this.isCamOff = false;
 
       if (videoElement) {
         videoElement.srcObject = this.localStream;
@@ -87,8 +88,8 @@ class WebRTCManager {
       this.setupSpeakingDetector();
       return true;
     } catch (err) {
-      console.warn('getUserMedia camera/mic prompt note:', err);
-      // Fallback: Try audio only if video failed
+      console.warn('Camera/mic full access note:', err);
+      // Fallback: Try audio only if video device is unavailable or blocked
       try {
         this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         this.isCamOff = true;
@@ -98,25 +99,48 @@ class WebRTCManager {
         this.setupSpeakingDetector();
         return true;
       } catch (audioErr) {
-        console.warn('Audio fallback also failed or blocked:', audioErr);
+        console.warn('Audio fallback also unavailable or blocked:', audioErr);
+        this.isCamOff = true;
+        this.isMuted = true;
         return false;
       }
     }
   }
 
+  /**
+   * Attach or update local tracks on the RTCPeerConnection transceivers
+   */
   attachLocalTracksToPeer() {
-    if (!this.peerConnection || !this.localStream) return;
+    if (!this.peerConnection) return;
 
-    const currentSenders = this.peerConnection.getSenders();
+    if (!this.localStream) {
+      // Ensure transceivers exist with sendrecv so incoming media can be negotiated
+      const transceivers = this.peerConnection.getTransceivers();
+      if (!transceivers.some((t) => t.receiver && t.receiver.track && t.receiver.track.kind === 'audio')) {
+        this.peerConnection.addTransceiver('audio', { direction: 'sendrecv' });
+      }
+      if (!transceivers.some((t) => t.receiver && t.receiver.track && t.receiver.track.kind === 'video')) {
+        this.peerConnection.addTransceiver('video', { direction: 'sendrecv' });
+      }
+      return;
+    }
+
+    const transceivers = this.peerConnection.getTransceivers();
     this.localStream.getTracks().forEach((track) => {
-      const existingSender = currentSenders.find((s) => s.track && s.track.kind === track.kind);
-      if (existingSender) {
-        existingSender.replaceTrack(track).catch(() => {});
+      // Find matching transceiver for this track kind
+      const existing = transceivers.find((t) =>
+        (t.sender && t.sender.track && t.sender.track.kind === track.kind) ||
+        (t.receiver && t.receiver.track && t.receiver.track.kind === track.kind)
+      );
+
+      if (existing && existing.sender) {
+        existing.direction = 'sendrecv';
+        existing.sender.replaceTrack(track).catch((e) => console.warn('replaceTrack note:', e));
       } else {
         try {
           this.peerConnection.addTrack(track, this.localStream);
         } catch (e) {
-          console.warn('Track add note:', e);
+          console.warn('addTrack note:', e);
         }
       }
     });
@@ -132,7 +156,13 @@ class WebRTCManager {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (!AudioCtx) return;
 
-      this.audioContext = new AudioCtx();
+      if (!this.audioContext) {
+        this.audioContext = new AudioCtx();
+      }
+      if (this.audioContext.state === 'suspended') {
+        this.audioContext.resume();
+      }
+
       const source = this.audioContext.createMediaStreamSource(this.localStream);
       this.analyser = this.audioContext.createAnalyser();
       this.analyser.fftSize = 256;
@@ -194,8 +224,8 @@ class WebRTCManager {
 
     this.peerConnection = new RTCPeerConnection(this.rtcConfig);
 
-    // Attach local media tracks directly
-    if (this.localStream) {
+    // Attach local media tracks or add sendrecv transceivers
+    if (this.localStream && this.localStream.getTracks().length > 0) {
       this.localStream.getTracks().forEach((track) => {
         try {
           this.peerConnection.addTrack(track, this.localStream);
@@ -203,17 +233,21 @@ class WebRTCManager {
           console.warn('Track add error:', e);
         }
       });
+      // Ensure video transceiver exists even if local stream is currently audio-only
+      if (!this.localStream.getVideoTracks().length) {
+        this.peerConnection.addTransceiver('video', { direction: 'sendrecv' });
+      }
     } else {
-      // Receive-only fallback if local media not yet granted
+      // Ready for both sending and receiving media
       try {
-        this.peerConnection.addTransceiver('audio', { direction: 'recvonly' });
-        this.peerConnection.addTransceiver('video', { direction: 'recvonly' });
+        this.peerConnection.addTransceiver('audio', { direction: 'sendrecv' });
+        this.peerConnection.addTransceiver('video', { direction: 'sendrecv' });
       } catch (e) {
         console.warn('addTransceiver note:', e);
       }
     }
 
-    // Handle remote track
+    // Handle incoming remote track
     this.peerConnection.ontrack = (event) => {
       console.log('[WebRTC Camera] Received remote track:', event.track.kind);
       if (event.streams && event.streams[0]) {
@@ -225,15 +259,12 @@ class WebRTCManager {
         this.remoteStream.addTrack(event.track);
       }
 
-      const remoteBubble = document.getElementById('remote-bubble');
-      if (remoteBubble) remoteBubble.classList.remove('cam-off');
-
       if (this.onRemoteStreamChange) {
-        this.onRemoteStreamChange(this.remoteStream);
+        this.onRemoteStreamChange(this.remoteStream, event.track);
       }
     };
 
-    // Send local ICE candidates
+    // Send local ICE candidates to peer
     this.peerConnection.onicecandidate = (event) => {
       if (event.candidate) {
         this.socket.emit('signal-ice', {
@@ -245,9 +276,12 @@ class WebRTCManager {
 
     this.peerConnection.onconnectionstatechange = () => {
       console.log('[WebRTC Camera] Connection state:', this.peerConnection.connectionState);
-      const remoteBubble = document.getElementById('remote-bubble');
       if (this.peerConnection.connectionState === 'connected') {
-        if (remoteBubble) remoteBubble.classList.remove('cam-off');
+        // Send current local media states so peer renders exact camera/mic state immediately
+        this.socket.emit('update-media-state', {
+          videoEnabled: !this.isCamOff,
+          audioEnabled: !this.isMuted
+        });
       } else if (this.peerConnection.connectionState === 'failed') {
         console.warn('[WebRTC Camera] Connection failed, attempting ICE restart...');
         if (isInitiator) {
@@ -338,33 +372,123 @@ class WebRTCManager {
   }
 
   /**
-   * Toggle Microphone mute
+   * Toggle Microphone Mute/Unmute
    */
   toggleAudio() {
-    if (!this.localStream) return false;
-    const audioTrack = this.localStream.getAudioTracks()[0];
-    if (audioTrack) {
-      this.isMuted = !this.isMuted;
-      audioTrack.enabled = !this.isMuted;
-      this.socket.emit('update-media-state', { audioEnabled: !this.isMuted });
-      return !this.isMuted;
+    if (this.localStream) {
+      const audioTrack = this.localStream.getAudioTracks()[0];
+      if (audioTrack) {
+        this.isMuted = !this.isMuted;
+        audioTrack.enabled = !this.isMuted;
+        this.socket.emit('update-media-state', {
+          audioEnabled: !this.isMuted,
+          videoEnabled: !this.isCamOff
+        });
+        return !this.isMuted;
+      }
     }
-    return false;
+    // If no stream was acquired yet, attempt to acquire audio
+    this.isMuted = !this.isMuted;
+    this.socket.emit('update-media-state', {
+      audioEnabled: !this.isMuted,
+      videoEnabled: !this.isCamOff
+    });
+    return !this.isMuted;
   }
 
   /**
-   * Toggle Camera on/off
+   * Toggle Camera ON/OFF (WhatsApp / Instagram Style)
+   * When turned OFF: camera is disabled, avatar shown locally & remotely.
+   * When turned ON: camera is acquired/enabled, live video streams to peer.
    */
-  toggleVideo() {
-    if (!this.localStream) return false;
-    const videoTrack = this.localStream.getVideoTracks()[0];
-    if (videoTrack) {
-      this.isCamOff = !this.isCamOff;
-      videoTrack.enabled = !this.isCamOff;
-      this.socket.emit('update-media-state', { videoEnabled: !this.isCamOff });
-      return !this.isCamOff;
+  async toggleVideo(localVideoElement) {
+    if (this.isCamOff) {
+      // Turn Camera ON
+      let videoTrack = this.localStream ? this.localStream.getVideoTracks()[0] : null;
+
+      if (!videoTrack || videoTrack.readyState === 'ended') {
+        try {
+          const freshStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: this.currentFacing,
+              width: { ideal: 640 },
+              height: { ideal: 480 },
+              frameRate: { ideal: 24 }
+            }
+          });
+          const newTrack = freshStream.getVideoTracks()[0];
+
+          if (!this.localStream) {
+            this.localStream = new MediaStream();
+          }
+          if (videoTrack) {
+            this.localStream.removeTrack(videoTrack);
+          }
+          this.localStream.addTrack(newTrack);
+          videoTrack = newTrack;
+        } catch (e) {
+          console.warn('Could not turn on camera hardware:', e);
+          return false;
+        }
+      } else {
+        videoTrack.enabled = true;
+      }
+
+      this.isCamOff = false;
+
+      if (localVideoElement) {
+        localVideoElement.srcObject = this.localStream;
+        localVideoElement.muted = true;
+        localVideoElement.play().catch(() => {});
+      }
+
+      const localBubble = document.getElementById('local-bubble');
+      if (localBubble) localBubble.classList.remove('cam-off');
+
+      this.attachLocalTracksToPeer();
+
+      this.socket.emit('update-media-state', {
+        videoEnabled: true,
+        audioEnabled: !this.isMuted
+      });
+
+      return true;
+    } else {
+      // Turn Camera OFF
+      this.isCamOff = true;
+
+      if (this.localStream) {
+        const videoTrack = this.localStream.getVideoTracks()[0];
+        if (videoTrack) {
+          videoTrack.enabled = false;
+        }
+      }
+
+      const localBubble = document.getElementById('local-bubble');
+      if (localBubble) localBubble.classList.add('cam-off');
+
+      // Update sender to null or disabled
+      if (this.peerConnection) {
+        const transceivers = this.peerConnection.getTransceivers();
+        const videoTransceiver = transceivers.find((t) =>
+          (t.sender && t.sender.track && t.sender.track.kind === 'video') ||
+          (t.receiver && t.receiver.track && t.receiver.track.kind === 'video')
+        );
+        if (videoTransceiver && videoTransceiver.sender && this.localStream) {
+          const videoTrack = this.localStream.getVideoTracks()[0];
+          if (videoTrack) {
+            videoTransceiver.sender.replaceTrack(videoTrack).catch(() => {});
+          }
+        }
+      }
+
+      this.socket.emit('update-media-state', {
+        videoEnabled: false,
+        audioEnabled: !this.isMuted
+      });
+
+      return false;
     }
-    return false;
   }
 
   /**
@@ -389,20 +513,18 @@ class WebRTCManager {
         });
 
         const newVideoTrack = newStream.getVideoTracks()[0];
-        this.localStream.removeTrack(oldVideoTrack);
+        if (oldVideoTrack) {
+          this.localStream.removeTrack(oldVideoTrack);
+        }
         this.localStream.addTrack(newVideoTrack);
+        this.isCamOff = false;
 
         if (localVideoElement) {
           localVideoElement.srcObject = this.localStream;
           localVideoElement.style.transform = (this.currentFacing === 'user') ? 'scaleX(-1)' : 'scaleX(1)';
         }
 
-        if (this.peerConnection) {
-          const sender = this.peerConnection.getSenders().find((s) => s.track && s.track.kind === 'video');
-          if (sender) {
-            sender.replaceTrack(newVideoTrack);
-          }
-        }
+        this.attachLocalTracksToPeer();
         return true;
       } catch (err) {
         console.error('Failed to flip camera:', err);
