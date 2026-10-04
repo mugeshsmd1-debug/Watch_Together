@@ -621,6 +621,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       setTimeout(() => {
         movieStream.initiateMoviePeerConnection(user.id);
       }, 500);
+    } else {
+      setTimeout(() => {
+        console.log('[Peer Joined] Asking peer for active movie stream:', user.id);
+        socket.emit('movie-stream-request', { targetId: user.id });
+      }, 600);
     }
   });
 
