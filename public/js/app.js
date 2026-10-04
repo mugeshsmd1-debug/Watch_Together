@@ -153,7 +153,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         onMovieStreamStarted: (data) => this.dispatch('movie-stream-started', data),
         onMovieStreamStopped: (data) => this.dispatch('movie-stream-stopped', data),
         onMovieControlAction: (data) => this.dispatch('movie-control-action', data),
-        onMovieProgressUpdate: (data) => this.dispatch('movie-progress-update', data)
+        onMovieProgressUpdate: (data) => this.dispatch('movie-progress-update', data),
+        onMovieStreamRequest: (data) => this.dispatch('movie-stream-request', data)
       });
 
       this.id = this.supabaseRoom.userId;
@@ -206,6 +207,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         else if (event === 'movie-stream-stopped') this.supabaseRoom.sendMovieStreamStopped();
         else if (event === 'movie-control-action') this.supabaseRoom.sendMovieControlAction(payload);
         else if (event === 'movie-progress-update') this.supabaseRoom.sendMovieProgressUpdate(payload);
+        else if (event === 'movie-stream-request') this.supabaseRoom.sendMovieStreamRequest(payload.targetId);
       }
     }
   }
@@ -215,10 +217,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Autoplay prompt helper
   let autoplayOverlayPrompt = null;
   function triggerAutoplayResume() {
-    if (mainVideo && !mainVideo.paused) {
-      mainVideo.play().catch(() => {});
+    if (mainVideo) {
+      mainVideo.muted = false;
+      if (!mainVideo.paused) mainVideo.play().catch(() => {});
     }
     if (remoteVideo && remoteVideo.srcObject) {
+      remoteVideo.muted = false;
       remoteVideo.play().catch(() => {});
     }
     if (autoplayOverlayPrompt) {
@@ -231,7 +235,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (autoplayOverlayPrompt) return;
     autoplayOverlayPrompt = document.createElement('div');
     autoplayOverlayPrompt.className = 'autoplay-prompt-banner';
-    autoplayOverlayPrompt.innerHTML = `<span>🔊 Tap to start audio & video sync</span>`;
+    autoplayOverlayPrompt.innerHTML = `<span>🔊 Tap anywhere to enable audio & video sync</span>`;
     autoplayOverlayPrompt.addEventListener('click', triggerAutoplayResume);
     document.body.appendChild(autoplayOverlayPrompt);
   }
@@ -244,10 +248,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   webrtc = new WebRTCManager(socket, (remoteStream) => {
     remoteVideo.srcObject = remoteStream;
     remoteVideo.playsInline = true;
+    remoteVideo.muted = false;
     const playPromise = remoteVideo.play();
     if (playPromise !== undefined) {
       playPromise.catch((err) => {
-        console.warn('Autoplay prevented remote video stream:', err);
+        console.warn('Autoplay prevented remote video stream, trying muted:', err);
+        remoteVideo.muted = true;
+        remoteVideo.play().catch(() => {});
         showAutoplayPrompt();
       });
     }
@@ -569,9 +576,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       remoteTagName.textContent = peer.name;
       remoteFallback.textContent = peer.name.charAt(0).toUpperCase();
 
-      // New joiner creates receiver peer connection and awaits offer from established peer
-      console.log('Peer found in room, awaiting offer from:', peer.id);
-      webrtc.createPeerConnection(peer.id, false);
+      const myId = socket.isVercel && socket.supabaseRoom ? socket.supabaseRoom.userId : (socket.id || '');
+      const isInitiator = Boolean(myId && peer.id && myId < peer.id);
+      console.log(`[Room Found Peer] ${peer.name} (${peer.id}). My ID: ${myId}. Am I initiator? ${isInitiator}`);
+      webrtc.createPeerConnection(peer.id, isInitiator);
 
       if (movieStream && movieStream.isStreamer) {
         setTimeout(() => {
@@ -592,7 +600,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Polite Peer pattern: peer with smaller ID initiates WebRTC offer
     const myId = socket.isVercel && socket.supabaseRoom ? socket.supabaseRoom.userId : (socket.id || '');
-    const isInitiator = !myId || !user.id || myId < user.id;
+    const isInitiator = Boolean(myId && user.id && myId < user.id);
 
     console.log(`[Peer Joined] ${user.name} (${user.id}). My ID: ${myId}. Am I initiator? ${isInitiator}`);
     webrtc.createPeerConnection(user.id, isInitiator);

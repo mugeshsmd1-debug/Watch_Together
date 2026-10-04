@@ -33,6 +33,7 @@ class SupabaseRoomManager {
     this.onMovieStreamStopped = options.onMovieStreamStopped || null;
     this.onMovieControlAction = options.onMovieControlAction || null;
     this.onMovieProgressUpdate = options.onMovieProgressUpdate || null;
+    this.onMovieStreamRequest = options.onMovieStreamRequest || null;
 
     this.initClient();
   }
@@ -219,6 +220,11 @@ class SupabaseRoomManager {
       .on('broadcast', { event: 'movie-progress-update' }, ({ payload }) => {
         if (payload.senderId !== this.userId && this.onMovieProgressUpdate) {
           this.onMovieProgressUpdate(payload);
+        }
+      })
+      .on('broadcast', { event: 'movie-stream-request' }, ({ payload }) => {
+        if (payload.targetId === this.userId && this.onMovieStreamRequest) {
+          this.onMovieStreamRequest(payload);
         }
       });
 
@@ -433,6 +439,15 @@ class SupabaseRoomManager {
       type: 'broadcast',
       event: 'movie-progress-update',
       payload: { ...data, senderId: this.userId }
+    });
+  }
+
+  sendMovieStreamRequest(targetId) {
+    if (!this.channel) return;
+    this.channel.send({
+      type: 'broadcast',
+      event: 'movie-stream-request',
+      payload: { targetId, watcherId: this.userId }
     });
   }
 

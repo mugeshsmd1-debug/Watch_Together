@@ -8,7 +8,7 @@ class MovieStreamManager {
   constructor(socket, mainVideoElement, callbacks = {}) {
     this.socket = socket;
     this.mainVideo = mainVideoElement;
-    this.callbacks = callbacks; // onStreamStateChange, onToast, onAutoplayPrompt
+    this.callbacks = callbacks; // onStreamStateChange, onToast, onAutoplayPrompt, onProgressUpdate
 
     this.isStreamer = false;
     this.isWatching = false;
@@ -33,7 +33,9 @@ class MovieStreamManager {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
         { urls: 'stun:stun.cloudflare.com:3478' },
+        { urls: 'stun:stun.services.mozilla.com' },
         { urls: 'stun:openrelay.metered.ca:80' },
         {
           urls: 'turn:openrelay.metered.ca:80',
@@ -72,6 +74,7 @@ class MovieStreamManager {
       await this.handleMovieIce(candidate);
     });
 
+    // When someone starts streaming, watcher immediately requests stream
     this.socket.on('movie-stream-started', (data) => {
       console.log('[Movie Stream] Friend started streaming:', data);
       this.isWatching = true;
@@ -93,6 +96,20 @@ class MovieStreamManager {
 
       if (this.callbacks.onToast) {
         this.callbacks.onToast(`🔴 ${this.streamerName} is now streaming "${this.streamTitle}" to the room!`, '🍿');
+      }
+
+      // Request live stream directly from streamer!
+      console.log('[Movie Stream] Requesting movie stream from streamer:', data.streamerId);
+      this.socket.emit('movie-stream-request', {
+        targetId: data.streamerId
+      });
+    });
+
+    // Streamer receives request from watcher and initiates WebRTC offer
+    this.socket.on('movie-stream-request', ({ watcherId }) => {
+      console.log('[Movie Stream] Received movie stream request from watcher:', watcherId);
+      if (this.isStreamer && this.localMovieStream) {
+        this.initiateMoviePeerConnection(watcherId);
       }
     });
 
@@ -123,7 +140,7 @@ class MovieStreamManager {
    * 1. Start streaming a local movie file (MP4, MKV, WebM, MOV)
    */
   async startFileStream(file, activePeerId = null) {
-    if (!file) return;
+    if (!file) return false;
     try {
       this.stopStream(false);
 
@@ -135,11 +152,25 @@ class MovieStreamManager {
 
       this.mainVideo.srcObject = null;
       this.mainVideo.src = fileUrl;
-      this.mainVideo.muted = false; // Local streamer can hear their own audio
+      this.mainVideo.muted = false;
 
       await this.mainVideo.play().catch((err) => {
-        console.warn('Initial play require user gesture:', err);
+        console.warn('Initial play requires user gesture:', err);
       });
+
+      // Wait until metadata/frames are ready before capturing
+      if (this.mainVideo.readyState < 2) {
+        await new Promise((resolve) => {
+          const onReady = () => {
+            this.mainVideo.removeEventListener('loadeddata', onReady);
+            this.mainVideo.removeEventListener('canplay', onReady);
+            resolve();
+          };
+          this.mainVideo.addEventListener('loadeddata', onReady);
+          this.mainVideo.addEventListener('canplay', onReady);
+          setTimeout(resolve, 800);
+        });
+      }
 
       // Capture audio + video from video element
       let stream = null;
@@ -153,7 +184,7 @@ class MovieStreamManager {
         throw new Error('captureStream is not supported by your browser for direct video capture.');
       }
 
-      // Ensure Web Audio capture so stereo sound is flawlessly routed to WebRTC
+      // Setup Web Audio routing so stereo sound is captured into WebRTC
       this.setupAudioCapture(this.mainVideo, stream);
 
       this.localMovieStream = stream;
@@ -176,7 +207,6 @@ class MovieStreamManager {
         });
       }
 
-      // If a peer is already in the room, start WebRTC offer to them!
       if (activePeerId) {
         this.initiateMoviePeerConnection(activePeerId);
       }
@@ -281,6 +311,17 @@ class MovieStreamManager {
         console.warn('Play blocked:', err);
       });
 
+      if (this.mainVideo.readyState < 2) {
+        await new Promise((resolve) => {
+          const onReady = () => {
+            this.mainVideo.removeEventListener('loadeddata', onReady);
+            resolve();
+          };
+          this.mainVideo.addEventListener('loadeddata', onReady);
+          setTimeout(resolve, 800);
+        });
+      }
+
       let stream = null;
       if (typeof this.mainVideo.captureStream === 'function') {
         stream = this.mainVideo.captureStream();
@@ -336,7 +377,6 @@ class MovieStreamManager {
         this.audioContext.resume();
       }
 
-      // If stream already has audio track, check if it works
       const existingAudio = stream.getAudioTracks();
       if (existingAudio && existingAudio.length > 0) {
         console.log('[Movie Stream] Video already has native audio track');
@@ -348,9 +388,9 @@ class MovieStreamManager {
           this.audioSourceNode = this.audioContext.createMediaElementSource(videoElement);
           this.audioDestNode = this.audioContext.createMediaStreamDestination();
           this.audioSourceNode.connect(this.audioDestNode);
-          this.audioSourceNode.connect(this.audioContext.destination); // Hear locally!
+          this.audioSourceNode.connect(this.audioContext.destination);
         } catch (e) {
-          console.warn('AudioElementSource already connected or cross-origin:', e);
+          console.warn('AudioElementSource note:', e);
         }
       }
 
@@ -429,10 +469,7 @@ class MovieStreamManager {
     };
 
     try {
-      const offer = await this.moviePC.createOffer({
-        offerToReceiveAudio: false,
-        offerToReceiveVideo: false
-      });
+      const offer = await this.moviePC.createOffer();
       await this.moviePC.setLocalDescription(offer);
 
       this.socket.emit('movie-signal-offer', {
@@ -461,14 +498,6 @@ class MovieStreamManager {
     this.moviePC = new RTCPeerConnection(this.rtcConfig);
     this.iceCandidateQueue = [];
 
-    // Receiver transceivers
-    try {
-      this.moviePC.addTransceiver('audio', { direction: 'recvonly' });
-      this.moviePC.addTransceiver('video', { direction: 'recvonly' });
-    } catch (e) {
-      console.warn('Transceiver note:', e);
-    }
-
     this.moviePC.ontrack = (event) => {
       console.log('[Movie WebRTC] Watcher received remote movie track:', event.track.kind);
       if (event.streams && event.streams[0]) {
@@ -480,17 +509,31 @@ class MovieStreamManager {
         this.remoteMovieStream.addTrack(event.track);
       }
 
-      this.mainVideo.src = '';
-      this.mainVideo.srcObject = this.remoteMovieStream;
-      this.mainVideo.muted = false;
+      if (this.mainVideo.srcObject !== this.remoteMovieStream) {
+        this.mainVideo.src = '';
+        this.mainVideo.srcObject = this.remoteMovieStream;
+        this.mainVideo.muted = false;
 
-      const playPromise = this.mainVideo.play();
-      if (playPromise !== undefined) {
-        playPromise.catch((err) => {
-          console.warn('Autoplay prevented remote movie playback:', err);
-          if (this.callbacks.onAutoplayPrompt) {
-            this.callbacks.onAutoplayPrompt();
-          }
+        const playPromise = this.mainVideo.play();
+        if (playPromise !== undefined) {
+          playPromise.catch((err) => {
+            console.warn('Autoplay prevented unmuted movie playback, falling back to muted:', err);
+            this.mainVideo.muted = true;
+            this.mainVideo.play().catch(() => {});
+            if (this.callbacks.onAutoplayPrompt) {
+              this.callbacks.onAutoplayPrompt();
+            }
+          });
+        }
+      }
+
+      // Hide standby overlay immediately when remote track arrives
+      if (this.callbacks.onStreamStateChange) {
+        this.callbacks.onStreamStateChange({
+          isStreamer: false,
+          isWatching: true,
+          streamerName: this.streamerName,
+          title: this.streamTitle
         });
       }
     };
@@ -534,7 +577,7 @@ class MovieStreamManager {
    */
   async handleMovieAnswer(sdp) {
     try {
-      if (this.moviePC) {
+      if (this.moviePC && this.moviePC.signalingState === 'have-local-offer') {
         await this.moviePC.setRemoteDescription(new RTCSessionDescription(sdp));
         await this.flushIceCandidateQueue();
       }

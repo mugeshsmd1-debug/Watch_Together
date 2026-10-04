@@ -18,12 +18,14 @@ class WebRTCManager {
     this.targetPeerId = null;
     this.iceCandidateQueue = [];
 
-    // WebRTC configuration with Google, Cloudflare STUN & Metered OpenRelay TURN servers
+    // WebRTC configuration with Google, Cloudflare & Mozilla STUN & Metered OpenRelay TURN servers
     this.rtcConfig = {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
         { urls: 'stun:stun.cloudflare.com:3478' },
+        { urls: 'stun:stun.services.mozilla.com' },
         { urls: 'stun:openrelay.metered.ca:80' },
         {
           urls: 'turn:openrelay.metered.ca:80',
@@ -68,23 +70,30 @@ class WebRTCManager {
 
       if (videoElement) {
         videoElement.srcObject = this.localStream;
+        videoElement.muted = true;
         videoElement.play().catch(() => {});
       }
 
       if (previewElement) {
         previewElement.srcObject = this.localStream;
+        previewElement.muted = true;
         previewElement.play().catch(() => {});
       }
+
+      const localBubble = document.getElementById('local-bubble');
+      if (localBubble) localBubble.classList.remove('cam-off');
 
       this.attachLocalTracksToPeer();
       this.setupSpeakingDetector();
       return true;
     } catch (err) {
-      console.warn('getUserMedia error (camera/mic may be unavailable or denied):', err);
+      console.warn('getUserMedia camera/mic prompt note:', err);
       // Fallback: Try audio only if video failed
       try {
         this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         this.isCamOff = true;
+        const localBubble = document.getElementById('local-bubble');
+        if (localBubble) localBubble.classList.add('cam-off');
         this.attachLocalTracksToPeer();
         this.setupSpeakingDetector();
         return true;
@@ -107,7 +116,7 @@ class WebRTCManager {
         try {
           this.peerConnection.addTrack(track, this.localStream);
         } catch (e) {
-          console.warn('Track already added or failed:', e);
+          console.warn('Track add note:', e);
         }
       }
     });
@@ -158,7 +167,7 @@ class WebRTCManager {
 
       checkSpeaking();
     } catch (e) {
-      console.log('AudioContext not active yet:', e);
+      console.log('AudioContext speaking detector note:', e);
     }
   }
 
@@ -166,8 +175,11 @@ class WebRTCManager {
    * Initialize RTCPeerConnection for a remote peer
    */
   createPeerConnection(remotePeerId, isInitiator = false) {
-    if (this.peerConnection && this.targetPeerId === remotePeerId && (this.peerConnection.connectionState === 'connected' || this.peerConnection.connectionState === 'connecting')) {
-      console.log('Peer connection already established for', remotePeerId);
+    if (this.peerConnection && this.targetPeerId === remotePeerId && this.peerConnection.signalingState !== 'closed') {
+      console.log('[WebRTC Camera] Peer connection already exists for', remotePeerId);
+      if (isInitiator && this.peerConnection.signalingState === 'stable') {
+        this.initiateOffer(remotePeerId);
+      }
       return;
     }
 
@@ -182,20 +194,28 @@ class WebRTCManager {
 
     this.peerConnection = new RTCPeerConnection(this.rtcConfig);
 
-    // Add transceivers so SDP always contains audio and video
-    try {
-      this.peerConnection.addTransceiver('audio', { direction: 'sendrecv' });
-      this.peerConnection.addTransceiver('video', { direction: 'sendrecv' });
-    } catch (e) {
-      console.warn('addTransceiver note:', e);
+    // Attach local media tracks directly
+    if (this.localStream) {
+      this.localStream.getTracks().forEach((track) => {
+        try {
+          this.peerConnection.addTrack(track, this.localStream);
+        } catch (e) {
+          console.warn('Track add error:', e);
+        }
+      });
+    } else {
+      // Receive-only fallback if local media not yet granted
+      try {
+        this.peerConnection.addTransceiver('audio', { direction: 'recvonly' });
+        this.peerConnection.addTransceiver('video', { direction: 'recvonly' });
+      } catch (e) {
+        console.warn('addTransceiver note:', e);
+      }
     }
-
-    // Attach local tracks if available
-    this.attachLocalTracksToPeer();
 
     // Handle remote track
     this.peerConnection.ontrack = (event) => {
-      console.log('Received remote track:', event.track.kind);
+      console.log('[WebRTC Camera] Received remote track:', event.track.kind);
       if (event.streams && event.streams[0]) {
         this.remoteStream = event.streams[0];
       } else {
@@ -204,6 +224,9 @@ class WebRTCManager {
         }
         this.remoteStream.addTrack(event.track);
       }
+
+      const remoteBubble = document.getElementById('remote-bubble');
+      if (remoteBubble) remoteBubble.classList.remove('cam-off');
 
       if (this.onRemoteStreamChange) {
         this.onRemoteStreamChange(this.remoteStream);
@@ -221,12 +244,12 @@ class WebRTCManager {
     };
 
     this.peerConnection.onconnectionstatechange = () => {
-      console.log('WebRTC connection state:', this.peerConnection.connectionState);
+      console.log('[WebRTC Camera] Connection state:', this.peerConnection.connectionState);
       const remoteBubble = document.getElementById('remote-bubble');
       if (this.peerConnection.connectionState === 'connected') {
         if (remoteBubble) remoteBubble.classList.remove('cam-off');
       } else if (this.peerConnection.connectionState === 'failed') {
-        console.warn('WebRTC connection failed, attempting ICE restart...');
+        console.warn('[WebRTC Camera] Connection failed, attempting ICE restart...');
         if (isInitiator) {
           this.peerConnection.restartIce();
         }
@@ -239,11 +262,10 @@ class WebRTCManager {
   }
 
   async initiateOffer(remotePeerId) {
+    if (!this.peerConnection || this.peerConnection.signalingState !== 'stable') return;
     try {
-      const offer = await this.peerConnection.createOffer({
-        offerToReceiveAudio: true,
-        offerToReceiveVideo: true
-      });
+      console.log('[WebRTC Camera] Creating offer for:', remotePeerId);
+      const offer = await this.peerConnection.createOffer();
       await this.peerConnection.setLocalDescription(offer);
 
       this.socket.emit('signal-offer', {
@@ -251,15 +273,21 @@ class WebRTCManager {
         sdp: offer
       });
     } catch (err) {
-      console.error('Error creating offer:', err);
+      console.error('[WebRTC Camera] Error creating offer:', err);
     }
   }
 
   async handleOffer(senderId, sdp) {
-    this.createPeerConnection(senderId, false);
+    console.log('[WebRTC Camera] Handling offer from:', senderId);
+    if (!this.peerConnection || this.targetPeerId !== senderId || this.peerConnection.signalingState === 'closed') {
+      this.createPeerConnection(senderId, false);
+    }
+
     try {
       await this.peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
       await this.flushIceCandidateQueue();
+
+      this.attachLocalTracksToPeer();
 
       const answer = await this.peerConnection.createAnswer();
       await this.peerConnection.setLocalDescription(answer);
@@ -269,18 +297,19 @@ class WebRTCManager {
         sdp: answer
       });
     } catch (err) {
-      console.error('Error handling offer:', err);
+      console.error('[WebRTC Camera] Error handling offer:', err);
     }
   }
 
   async handleAnswer(sdp) {
+    console.log('[WebRTC Camera] Handling answer');
     try {
-      if (this.peerConnection) {
+      if (this.peerConnection && this.peerConnection.signalingState === 'have-local-offer') {
         await this.peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
         await this.flushIceCandidateQueue();
       }
     } catch (err) {
-      console.error('Error setting remote description:', err);
+      console.error('[WebRTC Camera] Error setting remote description:', err);
     }
   }
 
@@ -293,7 +322,7 @@ class WebRTCManager {
       }
       await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
     } catch (err) {
-      console.warn('Error adding ICE candidate:', err);
+      console.warn('[WebRTC Camera] Error adding ICE candidate:', err);
     }
   }
 
@@ -303,7 +332,7 @@ class WebRTCManager {
       try {
         await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
       } catch (err) {
-        console.warn('Failed to flush buffered ICE candidate:', err);
+        console.warn('[WebRTC Camera] Failed to flush ICE candidate:', err);
       }
     }
   }

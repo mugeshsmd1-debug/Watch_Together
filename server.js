@@ -350,6 +350,19 @@ io.on('connection', (socket) => {
     });
   });
 
+  socket.on('movie-stream-request', ({ targetId }) => {
+    if (!currentRoomId) return;
+    if (targetId) {
+      socket.to(targetId).emit('movie-stream-request', {
+        watcherId: socket.id
+      });
+    } else {
+      socket.to(currentRoomId).emit('movie-stream-request', {
+        watcherId: socket.id
+      });
+    }
+  });
+
   socket.on('movie-stream-stopped', () => {
     if (!currentRoomId) return;
     const room = rooms.get(currentRoomId);
