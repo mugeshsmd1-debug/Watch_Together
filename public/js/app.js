@@ -81,6 +81,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnLoadUrl = document.getElementById('btn-load-url');
   const inputDriveUrl = document.getElementById('input-drive-url');
   const btnLoadDrive = document.getElementById('btn-load-drive');
+  const btnStreamScreen = document.getElementById('btn-stream-screen');
+
+  // Stream & Standby Stage Elements
+  const streamStatusBadge = document.getElementById('stream-status-badge');
+  const streamStatusText = document.getElementById('stream-status-text');
+  const btnStopStreaming = document.getElementById('btn-stop-streaming');
+  const stageStandbyOverlay = document.getElementById('stage-standby-overlay');
+  const btnStandbyStreamFile = document.getElementById('btn-standby-stream-file');
+  const btnStandbyShareScreen = document.getElementById('btn-standby-share-screen');
+  const btnStandbySampleMovie = document.getElementById('btn-standby-sample-movie');
 
   const sheetInviteBackdrop = document.getElementById('sheet-invite-backdrop');
   const btnCloseInvite = document.getElementById('btn-close-invite');
@@ -93,6 +103,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Application State
   let socket = null;
   let webrtc = null;
+  let movieStream = null;
+  let activePeerId = null;
   let syncManager = null;
   let currentRoomId = null;
   let currentUser = null;
@@ -134,7 +146,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         onSyncPulse: (pulse) => this.dispatch('sync-pulse-echo', pulse),
         onRequestSync: (senderId) => this.dispatch('request-sync', { senderId }),
         onNewChat: (msg) => this.dispatch('new-chat', msg),
-        onNewReaction: (reaction) => this.dispatch('new-reaction', reaction)
+        onNewReaction: (reaction) => this.dispatch('new-reaction', reaction),
+        onMovieSignalOffer: (data) => this.dispatch('movie-signal-offer', data),
+        onMovieSignalAnswer: (data) => this.dispatch('movie-signal-answer', data),
+        onMovieSignalIce: (data) => this.dispatch('movie-signal-ice', data),
+        onMovieStreamStarted: (data) => this.dispatch('movie-stream-started', data),
+        onMovieStreamStopped: (data) => this.dispatch('movie-stream-stopped', data),
+        onMovieControlAction: (data) => this.dispatch('movie-control-action', data),
+        onMovieProgressUpdate: (data) => this.dispatch('movie-progress-update', data)
       });
 
       this.id = this.supabaseRoom.userId;
@@ -180,6 +199,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         else if (event === 'sync-pulse') this.supabaseRoom.sendSyncPulse(payload.currentTime, payload.isPlaying);
         else if (event === 'send-chat') this.supabaseRoom.sendChat(payload.text);
         else if (event === 'send-reaction') this.supabaseRoom.sendReaction(payload.emoji);
+        else if (event === 'movie-signal-offer') this.supabaseRoom.sendMovieSignalOffer(payload.targetId, payload.sdp);
+        else if (event === 'movie-signal-answer') this.supabaseRoom.sendMovieSignalAnswer(payload.targetId, payload.sdp);
+        else if (event === 'movie-signal-ice') this.supabaseRoom.sendMovieSignalIce(payload.targetId, payload.candidate);
+        else if (event === 'movie-stream-started') this.supabaseRoom.sendMovieStreamStarted(payload);
+        else if (event === 'movie-stream-stopped') this.supabaseRoom.sendMovieStreamStopped();
+        else if (event === 'movie-control-action') this.supabaseRoom.sendMovieControlAction(payload);
+        else if (event === 'movie-progress-update') this.supabaseRoom.sendMovieProgressUpdate(payload);
       }
     }
   }
@@ -246,6 +272,47 @@ document.addEventListener('DOMContentLoaded', async () => {
     btnForward,
     btnFullscreen
   });
+
+  // Movie Stream Manager Instance (Streams movie/screen from one device to the other)
+  movieStream = new MovieStreamManager(socket, mainVideo, {
+    onStreamStateChange: ({ isStreamer, isWatching, streamerName, title, streamType }) => {
+      if (isStreamer) {
+        if (stageStandbyOverlay) stageStandbyOverlay.classList.add('hidden');
+        if (streamStatusBadge) {
+          streamStatusBadge.classList.remove('hidden');
+          streamStatusText.textContent = `STREAMING: ${title || 'Movie'}`;
+          btnStopStreaming.style.display = 'inline-block';
+        }
+        if (videoTitle) videoTitle.textContent = title || 'Your Stream';
+      } else if (isWatching) {
+        if (stageStandbyOverlay) stageStandbyOverlay.classList.add('hidden');
+        if (streamStatusBadge) {
+          streamStatusBadge.classList.remove('hidden');
+          streamStatusText.textContent = `🔴 LIVE: ${streamerName || 'Friend'}'s Stream`;
+          btnStopStreaming.style.display = 'none';
+        }
+        if (videoTitle) videoTitle.textContent = title || `${streamerName}'s Stream`;
+      } else {
+        if (stageStandbyOverlay) stageStandbyOverlay.classList.remove('hidden');
+        if (streamStatusBadge) streamStatusBadge.classList.add('hidden');
+        if (videoTitle) videoTitle.textContent = 'OurScreen';
+      }
+    },
+    onToast: (msg, icon) => showToast(msg, icon),
+    onAutoplayPrompt: () => showAutoplayPrompt(),
+    onProgressUpdate: (data) => {
+      if (syncManager) {
+        syncManager.lastKnownCurrentTime = data.currentTime;
+        if (labelCurrentTime) labelCurrentTime.textContent = syncManager.formatTime(data.currentTime);
+        if (labelDurationTime) labelDurationTime.textContent = syncManager.formatTime(data.duration);
+        const pct = (data.currentTime / (data.duration || 1)) * 100;
+        if (progressFill) progressFill.style.width = `${pct}%`;
+        if (progressHandle) progressHandle.style.left = `${pct}%`;
+        syncManager.updatePlayPauseUI(data.isPlaying);
+      }
+    }
+  });
+  window.movieStream = movieStream;
 
   // Dynamic Island Toast Helper
   function showToast(message, icon = '✨') {
@@ -481,12 +548,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // Socket: Room Joined
-  socket.on('room-joined', ({ roomId, user, otherUsers, videoState, chatHistory }) => {
+  socket.on('room-joined', ({ roomId, user, otherUsers, videoState, currentStreamer, chatHistory }) => {
     currentUser = user;
     currentRoomId = roomId;
 
-    if (videoState) {
-      syncManager.loadVideoSource(videoState.src, videoState.title, videoState.currentTime, videoState.isPlaying);
+    if (currentStreamer) {
+      showToast(`🔴 Friend is streaming "${currentStreamer.title}"!`, '🍿');
+    } else {
+      if (stageStandbyOverlay) stageStandbyOverlay.classList.remove('hidden');
     }
 
     if (chatHistory && chatHistory.length > 0) {
@@ -496,12 +565,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (otherUsers && otherUsers.length > 0) {
       const peer = otherUsers[0];
+      activePeerId = peer.id;
       remoteTagName.textContent = peer.name;
       remoteFallback.textContent = peer.name.charAt(0).toUpperCase();
 
       // New joiner creates receiver peer connection and awaits offer from established peer
       console.log('Peer found in room, awaiting offer from:', peer.id);
       webrtc.createPeerConnection(peer.id, false);
+
+      if (movieStream && movieStream.isStreamer) {
+        setTimeout(() => {
+          movieStream.initiateMoviePeerConnection(peer.id);
+        }, 500);
+      }
     } else {
       remoteTagName.textContent = 'Waiting for friend...';
     }
@@ -510,6 +586,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Socket: User Joined (Trigger WebRTC call from established host/peer)
   socket.on('user-joined', ({ user }) => {
     showToast(`${user.name} joined!`, '👋');
+    activePeerId = user.id;
     remoteTagName.textContent = user.name;
     remoteFallback.textContent = user.name.charAt(0).toUpperCase();
 
@@ -520,18 +597,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     console.log(`[Peer Joined] ${user.name} (${user.id}). My ID: ${myId}. Am I initiator? ${isInitiator}`);
     webrtc.createPeerConnection(user.id, isInitiator);
 
-    // If I already have a video loaded or playing, send current movie state to the new peer!
-    if (mainVideo.currentSrc || mainVideo.src) {
+    // If I am currently streaming a movie, immediately connect movie stream to the new user!
+    if (movieStream && movieStream.isStreamer) {
       setTimeout(() => {
-        socket.emit('video-action', {
-          type: 'change-source',
-          sourceType: 'sync',
-          src: mainVideo.currentSrc || mainVideo.src,
-          title: videoTitle.textContent || 'Movie',
-          currentTime: mainVideo.currentTime,
-          isPlaying: !mainVideo.paused,
-          timestamp: Date.now()
-        });
+        movieStream.initiateMoviePeerConnection(user.id);
       }, 500);
     }
   });
@@ -539,25 +608,24 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Socket: Request Sync (Peer joined and requested current movie state)
   socket.on('request-sync', ({ senderId }) => {
     console.log('Peer requested movie sync:', senderId);
-    if (mainVideo.currentSrc || mainVideo.src) {
-      socket.emit('video-action', {
-        type: 'change-source',
-        sourceType: 'sync',
-        src: mainVideo.currentSrc || mainVideo.src,
-        title: videoTitle.textContent || 'Movie',
-        currentTime: mainVideo.currentTime,
-        isPlaying: !mainVideo.paused,
-        timestamp: Date.now()
-      });
+    if (movieStream && movieStream.isStreamer) {
+      movieStream.initiateMoviePeerConnection(senderId);
     }
   });
 
   // Socket: User Left
-  socket.on('user-left', ({ userName }) => {
-    showToast(`${userName} left the room`, '🚪');
+  socket.on('user-left', ({ userId, userName }) => {
+    showToast(`${userName || 'Friend'} left the room`, '🚪');
+    if (activePeerId === userId) {
+      activePeerId = null;
+    }
     remoteTagName.textContent = 'Waiting for friend...';
     remoteVideo.srcObject = null;
     remoteBubble.classList.add('cam-off');
+
+    if (movieStream && movieStream.isWatching && movieStream.streamerId === userId) {
+      movieStream.stopWatching();
+    }
   });
 
   // Socket: WebRTC Signals
@@ -596,8 +664,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Socket: Video Sync Actions
   socket.on('video-sync', (action) => {
     console.log('Handling video-sync action:', action);
-    if (action.type === 'change-source' && action.sourceType === 'local-file') {
-      showToast(`Friend selected local file "${action.title}". Tap "Choose Local Movie File" to select your copy!`, '📁');
+    if (movieStream && movieStream.isWatching) {
+      // In live stream mode, video playback and audio are streamed directly via WebRTC
       return;
     }
     syncManager.handleSyncAction(action);
@@ -870,54 +938,72 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Media: Preloaded Movies Click
+  // Media: Preloaded Movies Click (Stream sample movie directly to room)
   document.querySelectorAll('.media-item-card[data-src]').forEach((card) => {
-    card.addEventListener('click', () => {
+    card.addEventListener('click', async () => {
       const src = card.dataset.src;
       const title = card.dataset.title;
-      syncManager.loadVideoSource(src, title, 0, true);
-
-      socket.emit('video-action', {
-        type: 'change-source',
-        sourceType: 'sample',
-        src,
-        title,
-        currentTime: 0,
-        isPlaying: true,
-        timestamp: Date.now()
-      });
 
       sheetMediaBackdrop.classList.remove('open');
-      showToast(`Now playing: ${title}`, '🎬');
+      showToast(`Starting stream: ${title}... 🍿`, '🎬');
+
+      await movieStream.startSampleStream(src, title, activePeerId);
     });
   });
 
-  // Media: Local File Picker
+  // Media: Screen / Tab / App Streamer
+  if (btnStreamScreen) {
+    btnStreamScreen.addEventListener('click', async () => {
+      sheetMediaBackdrop.classList.remove('open');
+      await movieStream.startScreenStream(activePeerId);
+    });
+  }
+
+  // Media: Local File Picker (Streams the movie file directly to friend - zero file needed on their side!)
   btnChooseLocalFile.addEventListener('click', () => {
     inputLocalVideo.click();
   });
 
-  inputLocalVideo.addEventListener('change', (e) => {
+  inputLocalVideo.addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
-    const fileUrl = URL.createObjectURL(file);
-    const title = file.name;
-    syncManager.loadVideoSource(fileUrl, title, 0, true);
-
-    socket.emit('video-action', {
-      type: 'change-source',
-      sourceType: 'local-file',
-      src: fileUrl,
-      title: `Local: ${title}`,
-      currentTime: 0,
-      isPlaying: true,
-      timestamp: Date.now()
-    });
-
     sheetMediaBackdrop.classList.remove('open');
-    showToast(`Loaded: ${title}. Friend can also choose this file to sync!`, '📁');
+    showToast(`Streaming "${file.name}" to the room... 🍿`, '🎬');
+
+    const started = await movieStream.startFileStream(file, activePeerId);
+    if (started) {
+      showToast(`Now streaming "${file.name}"! Friend is watching live!`, '✨');
+    }
   });
+
+  // Standby Stage Quick Action Buttons
+  if (btnStandbyStreamFile) {
+    btnStandbyStreamFile.addEventListener('click', () => {
+      inputLocalVideo.click();
+    });
+  }
+
+  if (btnStandbyShareScreen) {
+    btnStandbyShareScreen.addEventListener('click', async () => {
+      await movieStream.startScreenStream(activePeerId);
+    });
+  }
+
+  if (btnStandbySampleMovie) {
+    btnStandbySampleMovie.addEventListener('click', () => {
+      sheetMediaBackdrop.classList.add('open');
+    });
+  }
+
+  // Stop Streaming Button
+  if (btnStopStreaming) {
+    btnStopStreaming.addEventListener('click', (e) => {
+      e.stopPropagation();
+      movieStream.stopStream(true);
+      showToast('Stopped streaming movie to room', '⏹️');
+    });
+  }
 
   // Media: Custom URL
   btnLoadUrl.addEventListener('click', () => {

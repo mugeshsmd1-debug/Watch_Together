@@ -26,6 +26,13 @@ class SupabaseRoomManager {
     this.onNewChat = options.onNewChat || null;
     this.onNewReaction = options.onNewReaction || null;
     this.onMediaStateChanged = options.onMediaStateChanged || null;
+    this.onMovieSignalOffer = options.onMovieSignalOffer || null;
+    this.onMovieSignalAnswer = options.onMovieSignalAnswer || null;
+    this.onMovieSignalIce = options.onMovieSignalIce || null;
+    this.onMovieStreamStarted = options.onMovieStreamStarted || null;
+    this.onMovieStreamStopped = options.onMovieStreamStopped || null;
+    this.onMovieControlAction = options.onMovieControlAction || null;
+    this.onMovieProgressUpdate = options.onMovieProgressUpdate || null;
 
     this.initClient();
   }
@@ -177,6 +184,44 @@ class SupabaseRoomManager {
         }
       });
 
+    // 7. Movie WebRTC Stream & Control Broadcasts
+    this.channel
+      .on('broadcast', { event: 'movie-signal-offer' }, ({ payload }) => {
+        if (payload.targetId === this.userId && this.onMovieSignalOffer) {
+          this.onMovieSignalOffer({ senderId: payload.senderId, sdp: payload.sdp });
+        }
+      })
+      .on('broadcast', { event: 'movie-signal-answer' }, ({ payload }) => {
+        if (payload.targetId === this.userId && this.onMovieSignalAnswer) {
+          this.onMovieSignalAnswer({ senderId: payload.senderId, sdp: payload.sdp });
+        }
+      })
+      .on('broadcast', { event: 'movie-signal-ice' }, ({ payload }) => {
+        if (payload.targetId === this.userId && this.onMovieSignalIce) {
+          this.onMovieSignalIce({ candidate: payload.candidate });
+        }
+      })
+      .on('broadcast', { event: 'movie-stream-started' }, ({ payload }) => {
+        if (payload.streamerId !== this.userId && this.onMovieStreamStarted) {
+          this.onMovieStreamStarted(payload);
+        }
+      })
+      .on('broadcast', { event: 'movie-stream-stopped' }, ({ payload }) => {
+        if (payload.streamerId !== this.userId && this.onMovieStreamStopped) {
+          this.onMovieStreamStopped(payload);
+        }
+      })
+      .on('broadcast', { event: 'movie-control-action' }, ({ payload }) => {
+        if (payload.senderId !== this.userId && this.onMovieControlAction) {
+          this.onMovieControlAction(payload);
+        }
+      })
+      .on('broadcast', { event: 'movie-progress-update' }, ({ payload }) => {
+        if (payload.senderId !== this.userId && this.onMovieProgressUpdate) {
+          this.onMovieProgressUpdate(payload);
+        }
+      });
+
     // Subscribe and track presence
     this.channel.subscribe(async (status) => {
       if (status === 'SUBSCRIBED') {
@@ -318,6 +363,77 @@ class SupabaseRoomManager {
     if (this.onNewReaction) {
       this.onNewReaction(reaction);
     }
+  }
+
+  sendMovieSignalOffer(targetId, sdp) {
+    if (!this.channel) return;
+    const cleanSdp = sdp && sdp.toJSON ? sdp.toJSON() : { type: sdp.type, sdp: sdp.sdp };
+    this.channel.send({
+      type: 'broadcast',
+      event: 'movie-signal-offer',
+      payload: { senderId: this.userId, targetId, sdp: cleanSdp }
+    });
+  }
+
+  sendMovieSignalAnswer(targetId, sdp) {
+    if (!this.channel) return;
+    const cleanSdp = sdp && sdp.toJSON ? sdp.toJSON() : { type: sdp.type, sdp: sdp.sdp };
+    this.channel.send({
+      type: 'broadcast',
+      event: 'movie-signal-answer',
+      payload: { senderId: this.userId, targetId, sdp: cleanSdp }
+    });
+  }
+
+  sendMovieSignalIce(targetId, candidate) {
+    if (!this.channel || !candidate) return;
+    const cleanCandidate = candidate.toJSON ? candidate.toJSON() : {
+      candidate: candidate.candidate,
+      sdpMid: candidate.sdpMid,
+      sdpMLineIndex: candidate.sdpMLineIndex,
+      usernameFragment: candidate.usernameFragment
+    };
+    this.channel.send({
+      type: 'broadcast',
+      event: 'movie-signal-ice',
+      payload: { senderId: this.userId, targetId, candidate: cleanCandidate }
+    });
+  }
+
+  sendMovieStreamStarted(data) {
+    if (!this.channel) return;
+    this.channel.send({
+      type: 'broadcast',
+      event: 'movie-stream-started',
+      payload: { ...data, streamerId: this.userId }
+    });
+  }
+
+  sendMovieStreamStopped() {
+    if (!this.channel) return;
+    this.channel.send({
+      type: 'broadcast',
+      event: 'movie-stream-stopped',
+      payload: { streamerId: this.userId }
+    });
+  }
+
+  sendMovieControlAction(action) {
+    if (!this.channel) return;
+    this.channel.send({
+      type: 'broadcast',
+      event: 'movie-control-action',
+      payload: { ...action, senderId: this.userId }
+    });
+  }
+
+  sendMovieProgressUpdate(data) {
+    if (!this.channel) return;
+    this.channel.send({
+      type: 'broadcast',
+      event: 'movie-progress-update',
+      payload: { ...data, senderId: this.userId }
+    });
   }
 
   leaveRoom() {

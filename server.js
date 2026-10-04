@@ -277,6 +277,7 @@ io.on('connection', (socket) => {
       user: userProfile,
       otherUsers,
       videoState: room.videoState,
+      currentStreamer: room.currentStreamer || null,
       chatHistory: room.chat.slice(-30)
     });
 
@@ -307,6 +308,72 @@ io.on('connection', (socket) => {
     socket.to(targetId).emit('signal-ice', {
       senderId: socket.id,
       candidate
+    });
+  });
+
+  // 2b. Movie WebRTC Signaling (Direct peer streaming of movies & screen)
+  socket.on('movie-signal-offer', ({ targetId, sdp }) => {
+    socket.to(targetId).emit('movie-signal-offer', {
+      senderId: socket.id,
+      sdp
+    });
+  });
+
+  socket.on('movie-signal-answer', ({ targetId, sdp }) => {
+    socket.to(targetId).emit('movie-signal-answer', {
+      senderId: socket.id,
+      sdp
+    });
+  });
+
+  socket.on('movie-signal-ice', ({ targetId, candidate }) => {
+    socket.to(targetId).emit('movie-signal-ice', {
+      senderId: socket.id,
+      candidate
+    });
+  });
+
+  socket.on('movie-stream-started', (data) => {
+    if (!currentRoomId) return;
+    const room = rooms.get(currentRoomId);
+    if (room) {
+      room.currentStreamer = {
+        streamerId: socket.id,
+        streamerName: data.streamerName,
+        title: data.title,
+        streamType: data.streamType
+      };
+    }
+    socket.to(currentRoomId).emit('movie-stream-started', {
+      ...data,
+      streamerId: socket.id
+    });
+  });
+
+  socket.on('movie-stream-stopped', () => {
+    if (!currentRoomId) return;
+    const room = rooms.get(currentRoomId);
+    if (room) {
+      room.currentStreamer = null;
+    }
+    socket.to(currentRoomId).emit('movie-stream-stopped', {
+      streamerId: socket.id
+    });
+  });
+
+  socket.on('movie-control-action', (action) => {
+    if (!currentRoomId) return;
+    socket.to(currentRoomId).emit('movie-control-action', {
+      ...action,
+      senderId: socket.id
+    });
+  });
+
+  socket.on('movie-progress-update', (data) => {
+    if (!currentRoomId) return;
+    socket.to(currentRoomId).emit('movie-progress-update', {
+      ...data,
+      senderId: socket.id
     });
   });
 
@@ -443,6 +510,13 @@ io.on('connection', (socket) => {
       userId: socket.id,
       userName: user ? user.name : 'Guest'
     });
+
+    if (room.currentStreamer && room.currentStreamer.streamerId === socket.id) {
+      room.currentStreamer = null;
+      socket.to(currentRoomId).emit('movie-stream-stopped', {
+        streamerId: socket.id
+      });
+    }
 
     if (user && user.isHost && room.users.size > 0) {
       const nextHostEntry = room.users.entries().next().value;

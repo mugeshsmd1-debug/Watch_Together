@@ -19,12 +19,16 @@ Tested and optimized for iPhone (iOS Safari) and desktop browsers.
 3. **🎬 Draggable Floating Camera Bubbles**:
    - Camera feeds hover directly over the movie player in sleek iOS glass bubbles.
    - Touch and pointer draggable anywhere on screen so they never block subtitles.
-4. **▶️ Synchronized Video Playback Engine**:
-   - Play, pause, and seek stay synchronized between viewers.
-   - Sub-second drift correction: detects lag and applies smooth micro-speed adjustments (1.05x / 0.95x) to maintain alignment without audio stutter or frame skips.
-5. **📁 Content Options**:
+4. **📡 One-Device Movie & Screen Streaming (P2P WebRTC)**:
+   - Either device (the host or anyone who joined the room) can be the Streamer.
+   - Stream any local movie file (MP4, MKV, WebM, MOV), preloaded film, or share a Screen / Browser Tab / App window.
+   - The other device(s) watch the incoming live stream in real time with synchronized audio — **no need to have, upload, or play the movie file on both devices**!
+   - Remote controls: Watchers can pause, play, or seek, and the streamer's device updates instantly for everyone.
+5. **📁 Multiple Content Options**:
+   - Stream Local Movie Files directly from device storage.
+   - Screen / Tab / App sharing with system & tab audio (YouTube, VLC, desktop media players).
    - Preloaded High-Definition classics (Big Buck Bunny, Tears of Steel, Sintel, Elephants Dream).
-   - Local movie file picker (`URL.createObjectURL`): Watch personal movies stored on your device without waiting for heavy file uploads.
+   - Authenticated Google Drive streaming with HTTP 206 range seeking.
    - Direct video stream URL input (MP4 / WebM).
 6. **💬 Live Chat & ❤️ Reactions**:
    - Slide-up iOS bottom sheet chat drawer with unread counter badge.

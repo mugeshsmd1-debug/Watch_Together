@@ -151,6 +151,11 @@ class VideoSyncManager {
   }
 
   togglePlay() {
+    if (window.movieStream && window.movieStream.isWatching) {
+      const willPlay = this.video.paused;
+      window.movieStream.sendControlAction(willPlay ? 'play' : 'pause');
+      return;
+    }
     if (this.video.paused) {
       this.video.play().catch((err) => {
         console.warn('Play was blocked (user interaction required):', err);
@@ -161,6 +166,12 @@ class VideoSyncManager {
   }
 
   seekRelative(deltaSeconds) {
+    if (window.movieStream && window.movieStream.isWatching) {
+      const cur = this.lastKnownCurrentTime || this.video.currentTime || 0;
+      const target = Math.max(0, cur + deltaSeconds);
+      window.movieStream.sendControlAction('seek', target);
+      return;
+    }
     const newTime = Math.max(0, Math.min(this.video.duration || 0, this.video.currentTime + deltaSeconds));
     this.video.currentTime = newTime;
   }
@@ -221,7 +232,11 @@ class VideoSyncManager {
       this.isUserScrubbing = false;
       const clientX = e.changedTouches[0].clientX;
       const finalTime = handleScrub(clientX);
-      this.video.currentTime = finalTime;
+      if (window.movieStream && window.movieStream.isWatching) {
+        window.movieStream.sendControlAction('seek', finalTime);
+      } else {
+        this.video.currentTime = finalTime;
+      }
     });
 
     // Pointer events for desktop
@@ -239,7 +254,11 @@ class VideoSyncManager {
       if (!this.isUserScrubbing) return;
       this.isUserScrubbing = false;
       const finalTime = handleScrub(e.clientX);
-      this.video.currentTime = finalTime;
+      if (window.movieStream && window.movieStream.isWatching) {
+        window.movieStream.sendControlAction('seek', finalTime);
+      } else {
+        this.video.currentTime = finalTime;
+      }
     });
   }
 
