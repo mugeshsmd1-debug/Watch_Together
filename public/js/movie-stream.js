@@ -198,10 +198,41 @@ class MovieStreamManager {
         stream = this.mainVideo.captureStream();
       } else if (typeof this.mainVideo.mozCaptureStream === 'function') {
         stream = this.mainVideo.mozCaptureStream();
+      } else {
+        // Fallback for Safari & iOS WebKit using high performance Canvas capture
+        console.log('[Movie Stream] Using Canvas frame capture fallback for Safari/WebKit');
+        const canvas = document.createElement('canvas');
+        const vWidth = Math.min(1280, this.mainVideo.videoWidth || 1280);
+        const vHeight = Math.min(720, this.mainVideo.videoHeight || 720);
+        canvas.width = vWidth;
+        canvas.height = vHeight;
+        const ctx = canvas.getContext('2d');
+
+        let isCapturing = true;
+        this.captureCanvasCleanup = () => { isCapturing = false; };
+
+        const renderFrame = () => {
+          if (!isCapturing) return;
+          if (this.mainVideo && !this.mainVideo.paused && !this.mainVideo.ended) {
+            try {
+              ctx.drawImage(this.mainVideo, 0, 0, canvas.width, canvas.height);
+            } catch (e) {}
+          }
+          if ('requestVideoFrameCallback' in this.mainVideo) {
+            this.mainVideo.requestVideoFrameCallback(renderFrame);
+          } else {
+            requestAnimationFrame(renderFrame);
+          }
+        };
+        renderFrame();
+
+        if (typeof canvas.captureStream === 'function') {
+          stream = canvas.captureStream(24);
+        }
       }
 
       if (!stream) {
-        throw new Error('captureStream is not supported by your browser for direct video capture.');
+        throw new Error('Your browser does not support live video capture. For best results, stream movies from Chrome or Edge on Windows/Mac, and watch on iPhone!');
       }
 
       this.setupAudioCapture(this.mainVideo, stream);
