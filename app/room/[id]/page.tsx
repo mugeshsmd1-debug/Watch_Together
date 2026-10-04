@@ -242,8 +242,8 @@ export default function WatchRoomPage() {
       })
       .on("presence", { event: "join" }, ({ newPresences }) => {
         // If a new peer joins, establish WebRTC connection if camera/audio is active
-        const newPeer = newPresences[0] as { key: string; name: string };
-        if (newPeer && newPeer.key !== userId && localStreamRef.current) {
+        const newPeer = newPresences[0] as unknown as { key?: string; name?: string };
+        if (newPeer && newPeer.key && newPeer.key !== userId && localStreamRef.current) {
           initiateWebRtcCall(newPeer.key);
         }
       });
