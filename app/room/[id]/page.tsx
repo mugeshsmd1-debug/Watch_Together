@@ -227,14 +227,16 @@ export default function WatchRoomPage() {
         const state = channel.presenceState();
         const activeUsers: Participant[] = [];
         for (const id in state) {
-          const u = state[id][0] as { name: string; hasVideo?: boolean; hasAudio?: boolean; isHost?: boolean };
-          activeUsers.push({
-            id,
-            name: u.name || "Viewer",
-            isHost: u.isHost,
-            hasVideo: u.hasVideo,
-            hasAudio: u.hasAudio,
-          });
+          const userObj = state[id][0] as unknown as { name?: string; hasVideo?: boolean; hasAudio?: boolean; isHost?: boolean };
+          if (userObj) {
+            activeUsers.push({
+              id,
+              name: userObj.name || "Viewer",
+              isHost: userObj.isHost,
+              hasVideo: userObj.hasVideo,
+              hasAudio: userObj.hasAudio,
+            });
+          }
         }
         setParticipants(activeUsers);
       })
