@@ -609,6 +609,7 @@ html, body {
   opacity: 0;
   pointer-events: none;
   transform: scale(0.98);
+  display: none !important;
 }
 
 .standby-card {
