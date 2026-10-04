@@ -3,6 +3,39 @@
  * WhatsApp / Instagram Style Two-Way Video Call
  * Allows anyone to toggle camera & microphone anytime with real-time visibility across peers.
  */
+
+function preferH264(sdp) {
+  if (!sdp || typeof sdp !== 'string') return sdp;
+  const lines = sdp.split('\r\n');
+  const mVideoIndex = lines.findIndex((l) => l.startsWith('m=video'));
+  if (mVideoIndex === -1) return sdp;
+
+  const mVideoLine = lines[mVideoIndex];
+  const parts = mVideoLine.split(' ');
+  const header = parts.slice(0, 3);
+  const pts = parts.slice(3);
+
+  const h264Pts = [];
+  const otherPts = [];
+
+  pts.forEach((pt) => {
+    const isH264 = lines.some((l) =>
+      l.toLowerCase().includes(`a=rtpmap:${pt} h264/90000`)
+    );
+    if (isH264) {
+      h264Pts.push(pt);
+    } else {
+      otherPts.push(pt);
+    }
+  });
+
+  if (h264Pts.length > 0) {
+    lines[mVideoIndex] = `${header.join(' ')} ${[...h264Pts, ...otherPts].join(' ')}`;
+    return lines.join('\r\n');
+  }
+  return sdp;
+}
+
 class WebRTCManager {
   constructor(socket, onRemoteStreamChange) {
     this.socket = socket;
