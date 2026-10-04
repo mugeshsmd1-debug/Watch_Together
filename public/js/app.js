@@ -519,6 +519,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     localTagName.textContent = username;
     localFallback.textContent = username.charAt(0).toUpperCase();
 
+    // Keep URL synchronized with room code for easy sharing
+    window.history.replaceState({}, '', `?room=${encodeURIComponent(currentRoomId)}`);
+
     screenHome.classList.add('hidden');
     screenRoom.classList.remove('hidden');
 
