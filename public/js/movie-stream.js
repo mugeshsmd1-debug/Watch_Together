@@ -1,9 +1,43 @@
 /**
  * MovieStreamManager — Google Meet Style Live Movie & Screen Streaming
- * One device streams their movie file, screen share, or sample video.
- * Other devices in the room simply watch the live stream in real-time.
- * No synchronization pulses or dual-file seeking needed — exactly like Google Meet / Discord screenshare.
+ * Fully compatible with iOS Safari, Chrome, Edge, and Android WebKit.
+ * Uses hardware-accelerated H.264 codec prioritization so movies encoded on Windows
+ * play smoothly on iPhones and iPads without decoding stalls.
  */
+
+// Prioritize hardware-accelerated H.264 in WebRTC SDP for iOS Safari & macOS WebKit
+function preferH264(sdp) {
+  if (!sdp || typeof sdp !== 'string') return sdp;
+  const lines = sdp.split('\r\n');
+  const mVideoIndex = lines.findIndex((l) => l.startsWith('m=video'));
+  if (mVideoIndex === -1) return sdp;
+
+  const mVideoLine = lines[mVideoIndex];
+  const parts = mVideoLine.split(' ');
+  const header = parts.slice(0, 3);
+  const pts = parts.slice(3);
+
+  const h264Pts = [];
+  const otherPts = [];
+
+  pts.forEach((pt) => {
+    const isH264 = lines.some((l) =>
+      l.toLowerCase().includes(`a=rtpmap:${pt} h264/90000`)
+    );
+    if (isH264) {
+      h264Pts.push(pt);
+    } else {
+      otherPts.push(pt);
+    }
+  });
+
+  if (h264Pts.length > 0) {
+    lines[mVideoIndex] = `${header.join(' ')} ${[...h264Pts, ...otherPts].join(' ')}`;
+    return lines.join('\r\n');
+  }
+  return sdp;
+}
+
 class MovieStreamManager {
   constructor(socket, mainVideoElement, callbacks = {}) {
     this.socket = socket;
@@ -136,7 +170,7 @@ class MovieStreamManager {
       this.isStreamer = true;
       this.isWatching = false;
 
-      this.mainVideo.srcObject = null;
+      this.mainVideo.removeAttribute('srcObject');
       this.mainVideo.src = fileUrl;
       this.mainVideo.muted = false;
 
@@ -227,14 +261,14 @@ class MovieStreamManager {
       this.isStreamer = true;
       this.isWatching = false;
 
-      this.mainVideo.src = '';
+      this.mainVideo.removeAttribute('src');
       this.mainVideo.srcObject = screenStream;
-      this.mainVideo.muted = true; // Mute locally to prevent microphone loopback
+      this.mainVideo.muted = true; // Mute locally to prevent feedback loop
       await this.mainVideo.play().catch(() => {});
 
       this.localMovieStream = screenStream;
 
-      // Listen for browser "Stop sharing" bar
+      // Listen for browser "Stop sharing" button
       const videoTrack = screenStream.getVideoTracks()[0];
       if (videoTrack) {
         videoTrack.onended = () => {
@@ -294,7 +328,7 @@ class MovieStreamManager {
       this.isWatching = false;
 
       this.mainVideo.crossOrigin = 'anonymous';
-      this.mainVideo.srcObject = null;
+      this.mainVideo.removeAttribute('srcObject');
       this.mainVideo.src = sampleUrl;
       this.mainVideo.muted = false;
 
@@ -435,12 +469,18 @@ class MovieStreamManager {
     };
 
     try {
-      const offer = await this.moviePC.createOffer();
-      await this.moviePC.setLocalDescription(offer);
+      const offer = await this.moviePC.createOffer({
+        offerToReceiveAudio: false,
+        offerToReceiveVideo: false
+      });
+      // Prioritize H.264 for hardware decoding on iOS Safari
+      const sdpString = preferH264(offer.sdp);
+      const modOffer = new RTCSessionDescription({ type: offer.type, sdp: sdpString });
+      await this.moviePC.setLocalDescription(modOffer);
 
       this.socket.emit('movie-signal-offer', {
         targetId: remotePeerId,
-        sdp: offer
+        sdp: modOffer
       });
     } catch (err) {
       console.error('[Movie WebRTC] Error creating movie offer:', err);
@@ -448,7 +488,7 @@ class MovieStreamManager {
   }
 
   /**
-   * WebRTC: Watcher handles offer from Streamer
+   * WebRTC: Watcher handles offer from Streamer (iOS Safari & Desktop)
    */
   async handleMovieOffer(senderId, sdp) {
     this.targetPeerId = senderId;
@@ -476,14 +516,22 @@ class MovieStreamManager {
       }
 
       if (this.mainVideo.srcObject !== this.remoteMovieStream) {
-        this.mainVideo.src = '';
+        // iOS Safari: removeAttribute src before setting srcObject
+        this.mainVideo.removeAttribute('src');
         this.mainVideo.srcObject = this.remoteMovieStream;
-        this.mainVideo.muted = false;
+        this.mainVideo.setAttribute('playsinline', '');
+        this.mainVideo.setAttribute('webkit-playsinline', '');
+        this.mainVideo.muted = true; // Crucial for iOS Safari auto-playback!
 
         const playPromise = this.mainVideo.play();
         if (playPromise !== undefined) {
-          playPromise.catch((err) => {
-            console.warn('Autoplay prevented unmuted movie playback, falling back to muted:', err);
+          playPromise.then(() => {
+            console.log('[Movie WebRTC] Live stream started playing on iOS Safari');
+            if (this.callbacks.onAutoplayPrompt) {
+              this.callbacks.onAutoplayPrompt();
+            }
+          }).catch((err) => {
+            console.warn('[Movie WebRTC] Safari initial play note:', err);
             this.mainVideo.muted = true;
             this.mainVideo.play().catch(() => {});
             if (this.callbacks.onAutoplayPrompt) {
@@ -528,11 +576,13 @@ class MovieStreamManager {
       await this.flushIceCandidateQueue();
 
       const answer = await this.moviePC.createAnswer();
-      await this.moviePC.setLocalDescription(answer);
+      const sdpString = preferH264(answer.sdp);
+      const modAnswer = new RTCSessionDescription({ type: answer.type, sdp: sdpString });
+      await this.moviePC.setLocalDescription(modAnswer);
 
       this.socket.emit('movie-signal-answer', {
         targetId: senderId,
-        sdp: answer
+        sdp: modAnswer
       });
     } catch (err) {
       console.error('[Movie WebRTC] Error handling movie offer:', err);
@@ -589,8 +639,8 @@ class MovieStreamManager {
     }
 
     if (this.mainVideo) {
+      this.mainVideo.removeAttribute('src');
       this.mainVideo.srcObject = null;
-      this.mainVideo.src = '';
     }
 
     if (this.callbacks.onStreamStateChange) {
@@ -622,8 +672,8 @@ class MovieStreamManager {
 
     if (this.mainVideo) {
       this.mainVideo.pause();
+      this.mainVideo.removeAttribute('src');
       this.mainVideo.srcObject = null;
-      this.mainVideo.src = '';
     }
 
     if (notifyPeers) {
