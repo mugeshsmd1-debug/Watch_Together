@@ -1,6 +1,8 @@
 /**
- * Video Synchronization and Player Engine
- * Keeps movie playback in sync between peers with clock drift compensation and latency correction.
+ * VideoPlayerController (formerly VideoSyncManager)
+ * Manages player UI, time formatting, scrubber dragging, and play/pause controls.
+ * Operates purely locally without network sync pulses, as movie streaming is handled
+ * directly via real-time WebRTC live media stream (Google Meet style).
  */
 class VideoSyncManager {
   constructor(videoElement, socket, uiElements) {
@@ -8,12 +10,7 @@ class VideoSyncManager {
     this.socket = socket;
     this.ui = uiElements;
 
-    this.isRemoteUpdate = false;
     this.isUserScrubbing = false;
-    this.driftThresholdHard = 1.2; // seconds (hard seek)
-    this.driftThresholdSoft = 0.25; // seconds (playbackRate micro-nudge)
-    this.speedAdjustmentTimer = null;
-
     this.initPlayerListeners();
   }
 
@@ -36,7 +33,7 @@ class VideoSyncManager {
 
       const current = this.video.currentTime || 0;
       const duration = this.video.duration || 1;
-      const pct = (current / duration) * 100;
+      const pct = duration > 0 ? (current / duration) * 100 : 0;
 
       if (this.ui.labelCurrentTime) {
         this.ui.labelCurrentTime.textContent = this.formatTime(current);
@@ -51,66 +48,27 @@ class VideoSyncManager {
 
     // 2. Video durationchange
     this.video.addEventListener('durationchange', () => {
-      if (this.ui.labelDurationTime) {
+      if (this.ui.labelDurationTime && this.video.duration && !isNaN(this.video.duration)) {
         this.ui.labelDurationTime.textContent = this.formatTime(this.video.duration);
       }
     });
 
-    // 3. Progress buffer indicator
-    this.video.addEventListener('progress', () => {
-      if (this.video.buffered.length > 0 && this.video.duration) {
-        const bufferedEnd = this.video.buffered.end(this.video.buffered.length - 1);
-        const pct = (bufferedEnd / this.video.duration) * 100;
-        if (this.ui.progressBuffer) {
-          this.ui.progressBuffer.style.width = `${pct}%`;
-        }
-      }
-    });
-
-    // 4. Local User Play Event
+    // 3. Local User Play Event
     this.video.addEventListener('play', () => {
       this.updatePlayPauseUI(true);
-      if (this.isRemoteUpdate) return;
-
-      console.log('Local play event emitted');
-      this.socket.emit('video-action', {
-        type: 'play',
-        currentTime: this.video.currentTime,
-        timestamp: Date.now()
-      });
       this.flashCenterIndicator('play');
     });
 
-    // 5. Local User Pause Event
+    // 4. Local User Pause Event
     this.video.addEventListener('pause', () => {
       this.updatePlayPauseUI(false);
-      if (this.isRemoteUpdate) return;
-
-      console.log('Local pause event emitted');
-      this.socket.emit('video-action', {
-        type: 'pause',
-        currentTime: this.video.currentTime,
-        timestamp: Date.now()
-      });
       this.flashCenterIndicator('pause');
     });
 
-    // 6. Local User Seeked Event
-    this.video.addEventListener('seeked', () => {
-      if (this.isRemoteUpdate) return;
-
-      console.log('Local seek event emitted:', this.video.currentTime);
-      this.socket.emit('video-action', {
-        type: 'seek',
-        currentTime: this.video.currentTime,
-        timestamp: Date.now()
-      });
-    });
-
-    // 7. Scrubber Touch / Mouse Dragging
+    // 5. Scrubber Touch / Mouse Dragging
     this.setupScrubberEvents();
 
-    // 8. Control buttons
+    // 6. Control buttons
     if (this.ui.btnPlayPause) {
       this.ui.btnPlayPause.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -146,19 +104,22 @@ class VideoSyncManager {
         screenRoom.classList.remove('controls-hidden');
         return;
       }
+      // If user is watching a live stream, don't pause the stream on click
+      if (window.movieStream && window.movieStream.isWatching) {
+        return;
+      }
       this.togglePlay();
     });
   }
 
   togglePlay() {
     if (window.movieStream && window.movieStream.isWatching) {
-      const willPlay = this.video.paused;
-      window.movieStream.sendControlAction(willPlay ? 'play' : 'pause');
+      // Watching a live stream; video is driven by WebRTC
       return;
     }
     if (this.video.paused) {
       this.video.play().catch((err) => {
-        console.warn('Play was blocked (user interaction required):', err);
+        console.warn('Play note:', err);
       });
     } else {
       this.video.pause();
@@ -167,9 +128,6 @@ class VideoSyncManager {
 
   seekRelative(deltaSeconds) {
     if (window.movieStream && window.movieStream.isWatching) {
-      const cur = this.lastKnownCurrentTime || this.video.currentTime || 0;
-      const target = Math.max(0, cur + deltaSeconds);
-      window.movieStream.sendControlAction('seek', target);
       return;
     }
     const newTime = Math.max(0, Math.min(this.video.duration || 0, this.video.currentTime + deltaSeconds));
@@ -203,6 +161,7 @@ class VideoSyncManager {
     if (!track) return;
 
     const handleScrub = (clientX) => {
+      if (window.movieStream && window.movieStream.isWatching) return 0;
       const rect = track.getBoundingClientRect();
       const pos = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
       const targetTime = pos * (this.video.duration || 0);
@@ -214,33 +173,26 @@ class VideoSyncManager {
       return targetTime;
     };
 
-    // Touch events for mobile Safari
     track.addEventListener('touchstart', (e) => {
+      if (window.movieStream && window.movieStream.isWatching) return;
       this.isUserScrubbing = true;
-      const clientX = e.touches[0].clientX;
-      handleScrub(clientX);
+      handleScrub(e.touches[0].clientX);
     }, { passive: true });
 
     window.addEventListener('touchmove', (e) => {
       if (!this.isUserScrubbing) return;
-      const clientX = e.touches[0].clientX;
-      handleScrub(clientX);
+      handleScrub(e.touches[0].clientX);
     }, { passive: true });
 
     window.addEventListener('touchend', (e) => {
       if (!this.isUserScrubbing) return;
       this.isUserScrubbing = false;
-      const clientX = e.changedTouches[0].clientX;
-      const finalTime = handleScrub(clientX);
-      if (window.movieStream && window.movieStream.isWatching) {
-        window.movieStream.sendControlAction('seek', finalTime);
-      } else {
-        this.video.currentTime = finalTime;
-      }
+      const finalTime = handleScrub(e.changedTouches[0].clientX);
+      this.video.currentTime = finalTime;
     });
 
-    // Pointer events for desktop
     track.addEventListener('pointerdown', (e) => {
+      if (window.movieStream && window.movieStream.isWatching) return;
       this.isUserScrubbing = true;
       handleScrub(e.clientX);
     });
@@ -254,158 +206,37 @@ class VideoSyncManager {
       if (!this.isUserScrubbing) return;
       this.isUserScrubbing = false;
       const finalTime = handleScrub(e.clientX);
-      if (window.movieStream && window.movieStream.isWatching) {
-        window.movieStream.sendControlAction('seek', finalTime);
-      } else {
-        this.video.currentTime = finalTime;
-      }
+      this.video.currentTime = finalTime;
     });
   }
 
-  /**
-   * Handle incoming synchronization action from friend or server
-   */
-  handleSyncAction(action) {
-    this.isRemoteUpdate = true;
-    const now = Date.now();
-    const networkDelay = (now - (action.serverTimestamp || now)) / 1000;
-
-    console.log(`[Sync Action: ${action.type}] From: ${action.senderName || 'Peer'}, delay: ${networkDelay.toFixed(3)}s`);
-
-    if (action.type === 'change-source') {
-      this.loadVideoSource(action.src, action.title, action.currentTime || 0, action.isPlaying);
-      this.isRemoteUpdate = false;
-      return;
-    }
-
-    const expectedCurrentTime = action.currentTime + (action.isPlaying ? networkDelay : 0);
-    const drift = Math.abs(this.video.currentTime - expectedCurrentTime);
-
-    if (action.type === 'play') {
-      if (drift > this.driftThresholdHard) {
-        this.video.currentTime = expectedCurrentTime;
-      }
-      const playPromise = this.video.play();
-      if (playPromise !== undefined) {
-        playPromise.catch((err) => {
-          console.warn('Autoplay prevented movie play:', err);
-          if (window.showAutoplayPrompt) window.showAutoplayPrompt();
-        });
-      }
-      this.updatePlayPauseUI(true);
-      this.flashCenterIndicator('play');
-    } else if (action.type === 'pause') {
-      this.video.pause();
-      if (drift > 0.3) {
-        this.video.currentTime = action.currentTime;
-      }
-      this.updatePlayPauseUI(false);
-      this.flashCenterIndicator('pause');
-    } else if (action.type === 'seek') {
-      this.video.currentTime = expectedCurrentTime;
-    }
-
-    setTimeout(() => {
-      this.isRemoteUpdate = false;
-    }, 150);
-  }
-
-  /**
-   * Continuous sync drift compensation
-   */
-  handleSyncPulse(pulse) {
-    if (this.isUserScrubbing || this.isRemoteUpdate) return;
-
-    const now = Date.now();
-    const delay = (now - pulse.serverTimestamp) / 1000;
-    const targetTime = pulse.currentTime + (pulse.isPlaying ? delay : 0);
-    const drift = Math.abs(this.video.currentTime - targetTime);
-
-    const syncPill = document.getElementById('sync-pill');
-    const syncText = document.getElementById('sync-pill-text');
-
-    if (drift < 0.2) {
-      if (syncPill) syncPill.style.borderColor = 'rgba(48, 209, 88, 0.4)';
-      if (syncText) syncText.textContent = 'Synced';
-    } else if (drift < this.driftThresholdHard) {
-      if (syncPill) syncPill.style.borderColor = 'rgba(255, 159, 10, 0.5)';
-      if (syncText) syncText.textContent = 'Aligning...';
-
-      // Soft rate nudge: speed up or slow down slightly without skipping frames
-      if (pulse.isPlaying && !this.video.paused) {
-        clearTimeout(this.speedAdjustmentTimer);
-        this.video.playbackRate = (this.video.currentTime < targetTime) ? 1.05 : 0.95;
-        this.speedAdjustmentTimer = setTimeout(() => {
-          this.video.playbackRate = 1.0;
-        }, 1500);
-      }
-    } else {
-      // Hard seek if drift is severe
-      console.log(`[Drift Warning] Drift is ${drift.toFixed(2)}s. Performing hard seek to ${targetTime.toFixed(2)}s`);
-      this.isRemoteUpdate = true;
-      this.video.currentTime = targetTime;
-      if (pulse.isPlaying && this.video.paused) {
-        this.video.play().catch(() => {});
-      }
-      setTimeout(() => {
-        this.isRemoteUpdate = false;
-      }, 150);
-    }
-  }
-
-  /**
-   * Change movie source (Sample movie, local file object URL, or custom URL)
-   */
-  loadVideoSource(src, title, startTime = 0, autoPlay = false) {
-    if (!src) return;
-    this.video.src = src;
-    if (this.ui.videoTitle) {
-      this.ui.videoTitle.textContent = title || 'Movie';
-    }
-    this.video.load();
-
-    const onLoaded = () => {
-      if (startTime > 0) {
-        this.video.currentTime = startTime;
-      }
-      if (autoPlay) {
-        const playPromise = this.video.play();
-        if (playPromise !== undefined) {
-          playPromise.catch((err) => {
-            console.warn('Autoplay prevented movie play on load:', err);
-            if (window.showAutoplayPrompt) window.showAutoplayPrompt();
-          });
-        }
-      }
-    };
-
-    if (this.video.readyState >= 1) {
-      onLoaded();
-    } else {
-      this.video.addEventListener('loadedmetadata', onLoaded, { once: true });
-    }
-  }
-
   toggleFullscreen() {
-    const stage = document.getElementById('movie-stage');
-    if (!stage) return;
-
+    const stage = document.getElementById('movie-stage') || this.video;
     if (!document.fullscreenElement && !document.webkitFullscreenElement) {
       if (stage.requestFullscreen) {
         stage.requestFullscreen().catch(() => {});
       } else if (stage.webkitRequestFullscreen) {
         stage.webkitRequestFullscreen();
       } else if (this.video.webkitEnterFullscreen) {
-        // iOS Safari native video fullscreen fallback
         this.video.webkitEnterFullscreen();
       }
     } else {
       if (document.exitFullscreen) {
-        document.exitFullscreen();
+        document.exitFullscreen().catch(() => {});
       } else if (document.webkitExitFullscreen) {
         document.webkitExitFullscreen();
       }
     }
+  }
+
+  loadVideoSource(src, title) {
+    if (this.ui.videoTitle) {
+      this.ui.videoTitle.textContent = title || 'Movie';
+    }
+    this.video.srcObject = null;
+    this.video.src = src;
+    this.video.load();
+    this.video.play().catch(() => {});
   }
 }
 
