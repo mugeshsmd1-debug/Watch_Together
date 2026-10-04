@@ -287,6 +287,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Movie Stream Manager Instance (Streams movie/screen from one device to the other)
   movieStream = new MovieStreamManager(socket, mainVideo, {
     onStreamStateChange: ({ isStreamer, isWatching, streamerName, title, streamType }) => {
+      const syncPillText = document.getElementById('sync-pill-text');
+      const syncPill = document.getElementById('sync-pill');
       if (isStreamer) {
         if (stageStandbyOverlay) stageStandbyOverlay.classList.add('hidden');
         if (streamStatusBadge) {
@@ -295,6 +297,8 @@ document.addEventListener('DOMContentLoaded', async () => {
           btnStopStreaming.style.display = 'inline-block';
         }
         if (videoTitle) videoTitle.textContent = title || 'Your Stream';
+        if (syncPillText) syncPillText.textContent = 'Streaming';
+        if (syncPill) syncPill.classList.remove('hidden');
       } else if (isWatching) {
         if (stageStandbyOverlay) stageStandbyOverlay.classList.add('hidden');
         if (streamStatusBadge) {
@@ -303,25 +307,17 @@ document.addEventListener('DOMContentLoaded', async () => {
           btnStopStreaming.style.display = 'none';
         }
         if (videoTitle) videoTitle.textContent = title || `${streamerName}'s Stream`;
+        if (syncPillText) syncPillText.textContent = 'Live';
+        if (syncPill) syncPill.classList.remove('hidden');
       } else {
         if (stageStandbyOverlay) stageStandbyOverlay.classList.remove('hidden');
         if (streamStatusBadge) streamStatusBadge.classList.add('hidden');
         if (videoTitle) videoTitle.textContent = 'OurScreen';
+        if (syncPillText) syncPillText.textContent = 'Standby';
       }
     },
     onToast: (msg, icon) => showToast(msg, icon),
-    onAutoplayPrompt: () => showAutoplayPrompt(),
-    onProgressUpdate: (data) => {
-      if (syncManager) {
-        syncManager.lastKnownCurrentTime = data.currentTime;
-        if (labelCurrentTime) labelCurrentTime.textContent = syncManager.formatTime(data.currentTime);
-        if (labelDurationTime) labelDurationTime.textContent = syncManager.formatTime(data.duration);
-        const pct = (data.currentTime / (data.duration || 1)) * 100;
-        if (progressFill) progressFill.style.width = `${pct}%`;
-        if (progressHandle) progressHandle.style.left = `${pct}%`;
-        syncManager.updatePlayPauseUI(data.isPlaying);
-      }
-    }
+    onAutoplayPrompt: () => showAutoplayPrompt()
   });
   window.movieStream = movieStream;
 
