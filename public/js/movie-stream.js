@@ -272,12 +272,23 @@ class MovieStreamManager {
   /**
    * 3. Start streaming sample movie (Big Buck Bunny)
    */
-  async startSampleStream(activePeerId = null) {
+  async startSampleStream(arg1 = null, arg2 = null, arg3 = null) {
     try {
       this.stopStream(false);
 
-      const sampleUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
-      this.streamTitle = 'Big Buck Bunny (Sample HD)';
+      let sampleUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
+      let sampleTitle = 'Big Buck Bunny (Sample HD)';
+      let activePeerId = null;
+
+      if (typeof arg1 === 'string') {
+        sampleUrl = arg1;
+        sampleTitle = arg2 || 'Sample Movie';
+        activePeerId = arg3 || null;
+      } else {
+        activePeerId = arg1 || null;
+      }
+
+      this.streamTitle = sampleTitle;
       this.streamType = 'sample';
       this.isStreamer = true;
       this.isWatching = false;
