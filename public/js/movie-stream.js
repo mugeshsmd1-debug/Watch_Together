@@ -1,41 +1,28 @@
 /**
  * MovieStreamManager — Google Meet Style Live Movie & Screen Streaming
- * Fully compatible with iOS Safari, Chrome, Edge, and Android WebKit.
- * Uses hardware-accelerated H.264 codec prioritization so movies encoded on Windows
- * play smoothly on iPhones and iPads without decoding stalls.
+ * Compatible with Windows, Mac, iOS Safari, Android, Chrome, and Edge.
+ * Real-time WebRTC media pipeline with continuous frame generation and automatic audio routing.
  */
 
-// Prioritize hardware-accelerated H.264 in WebRTC SDP for iOS Safari & macOS WebKit
-function preferH264(sdp) {
-  if (!sdp || typeof sdp !== 'string') return sdp;
-  const lines = sdp.split('\r\n');
-  const mVideoIndex = lines.findIndex((l) => l.startsWith('m=video'));
-  if (mVideoIndex === -1) return sdp;
-
-  const mVideoLine = lines[mVideoIndex];
-  const parts = mVideoLine.split(' ');
-  const header = parts.slice(0, 3);
-  const pts = parts.slice(3);
-
-  const h264Pts = [];
-  const otherPts = [];
-
-  pts.forEach((pt) => {
-    const isH264 = lines.some((l) =>
-      l.toLowerCase().includes(`a=rtpmap:${pt} h264/90000`)
-    );
-    if (isH264) {
-      h264Pts.push(pt);
-    } else {
-      otherPts.push(pt);
-    }
-  });
-
-  if (h264Pts.length > 0) {
-    lines[mVideoIndex] = `${header.join(' ')} ${[...h264Pts, ...otherPts].join(' ')}`;
-    return lines.join('\r\n');
+// Helper to set codec preferences via native W3C WebRTC API without corrupting SDP
+function setTransceiverCodecPreferences(pc) {
+  if (typeof RTCRtpReceiver !== 'undefined' && RTCRtpReceiver.getCapabilities) {
+    try {
+      const caps = RTCRtpReceiver.getCapabilities('video');
+      if (caps && caps.codecs) {
+        const h264 = caps.codecs.filter((c) => c.mimeType && c.mimeType.toLowerCase() === 'video/h264');
+        const others = caps.codecs.filter((c) => !c.mimeType || c.mimeType.toLowerCase() !== 'video/h264');
+        if (h264.length > 0) {
+          const preferred = [...h264, ...others];
+          pc.getTransceivers().forEach((t) => {
+            if (t.setCodecPreferences && t.sender && t.sender.track && t.sender.track.kind === 'video') {
+              try { t.setCodecPreferences(preferred); } catch (_) {}
+            }
+          });
+        }
+      }
+    } catch (_) {}
   }
-  return sdp;
 }
 
 class MovieStreamManager {
@@ -192,12 +179,16 @@ class MovieStreamManager {
         });
       }
 
-      // Capture audio + video from video element
+      // Capture audio + video from video element with 30fps clock
       let stream = null;
       if (typeof this.mainVideo.captureStream === 'function') {
-        stream = this.mainVideo.captureStream();
+        try {
+          stream = this.mainVideo.captureStream(30);
+        } catch (_) {
+          stream = this.mainVideo.captureStream();
+        }
       } else if (typeof this.mainVideo.mozCaptureStream === 'function') {
-        stream = this.mainVideo.mozCaptureStream();
+        stream = this.mainVideo.mozCaptureStream(30);
       } else {
         // Fallback for Safari & iOS WebKit using high performance Canvas capture
         console.log('[Movie Stream] Using Canvas frame capture fallback for Safari/WebKit');
@@ -233,6 +224,15 @@ class MovieStreamManager {
 
       if (!stream) {
         throw new Error('Your browser does not support live video capture. For best results, stream movies from Chrome or Edge on Windows/Mac, and watch on iPhone!');
+      }
+
+      // Optimize video track for continuous movie motion
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack.enabled = true;
+        if ('contentHint' in videoTrack) {
+          videoTrack.contentHint = 'motion';
+        }
       }
 
       this.setupAudioCapture(this.mainVideo, stream);
@@ -297,16 +297,17 @@ class MovieStreamManager {
       this.mainVideo.muted = true; // Mute locally to prevent feedback loop
       await this.mainVideo.play().catch(() => {});
 
-      this.localMovieStream = screenStream;
-
-      // Listen for browser "Stop sharing" button
-      const videoTrack = screenStream.getVideoTracks()[0];
-      if (videoTrack) {
-        videoTrack.onended = () => {
+      const vTrack = screenStream.getVideoTracks()[0];
+      if (vTrack) {
+        vTrack.enabled = true;
+        if ('contentHint' in vTrack) vTrack.contentHint = 'motion';
+        vTrack.onended = () => {
           console.log('Screen sharing ended by user');
           this.stopStream(true);
         };
       }
+
+      this.localMovieStream = screenStream;
 
       this.socket.emit('movie-stream-started', {
         title: this.streamTitle,
@@ -380,12 +381,21 @@ class MovieStreamManager {
 
       let stream = null;
       if (typeof this.mainVideo.captureStream === 'function') {
-        stream = this.mainVideo.captureStream();
+        try {
+          stream = this.mainVideo.captureStream(30);
+        } catch (_) {
+          stream = this.mainVideo.captureStream();
+        }
       } else if (typeof this.mainVideo.mozCaptureStream === 'function') {
-        stream = this.mainVideo.mozCaptureStream();
+        stream = this.mainVideo.mozCaptureStream(30);
       }
 
       if (stream) {
+        const vTrack = stream.getVideoTracks()[0];
+        if (vTrack) {
+          vTrack.enabled = true;
+          if ('contentHint' in vTrack) vTrack.contentHint = 'motion';
+        }
         this.setupAudioCapture(this.mainVideo, stream);
         this.localMovieStream = stream;
       }
@@ -481,6 +491,8 @@ class MovieStreamManager {
       this.moviePC.addTrack(track, this.localMovieStream);
     });
 
+    setTransceiverCodecPreferences(this.moviePC);
+
     this.moviePC.onicecandidate = (event) => {
       if (event.candidate) {
         this.socket.emit('movie-signal-ice', {
@@ -500,18 +512,12 @@ class MovieStreamManager {
     };
 
     try {
-      const offer = await this.moviePC.createOffer({
-        offerToReceiveAudio: false,
-        offerToReceiveVideo: false
-      });
-      // Prioritize H.264 for hardware decoding on iOS Safari
-      const sdpString = preferH264(offer.sdp);
-      const modOffer = new RTCSessionDescription({ type: offer.type, sdp: sdpString });
-      await this.moviePC.setLocalDescription(modOffer);
+      const offer = await this.moviePC.createOffer();
+      await this.moviePC.setLocalDescription(offer);
 
       this.socket.emit('movie-signal-offer', {
         targetId: remotePeerId,
-        sdp: modOffer
+        sdp: offer
       });
     } catch (err) {
       console.error('[Movie WebRTC] Error creating movie offer:', err);
@@ -519,7 +525,7 @@ class MovieStreamManager {
   }
 
   /**
-   * WebRTC: Watcher handles offer from Streamer (iOS Safari & Desktop)
+   * WebRTC: Watcher handles offer from Streamer
    */
   async handleMovieOffer(senderId, sdp) {
     this.targetPeerId = senderId;
@@ -536,40 +542,35 @@ class MovieStreamManager {
     this.iceCandidateQueue = [];
 
     this.moviePC.ontrack = (event) => {
-      console.log('[Movie WebRTC] Watcher received remote movie track:', event.track.kind);
-      if (event.streams && event.streams[0]) {
-        this.remoteMovieStream = event.streams[0];
-      } else {
-        if (!this.remoteMovieStream) {
-          this.remoteMovieStream = new MediaStream();
-        }
+      console.log('[Movie WebRTC] Watcher received track:', event.track.kind, event.track.id);
+
+      if (!this.remoteMovieStream) {
+        this.remoteMovieStream = new MediaStream();
+      }
+
+      if (!this.remoteMovieStream.getTracks().some((t) => t.id === event.track.id)) {
         this.remoteMovieStream.addTrack(event.track);
       }
 
-      if (this.mainVideo.srcObject !== this.remoteMovieStream) {
-        // iOS Safari: removeAttribute src before setting srcObject
-        this.mainVideo.removeAttribute('src');
-        this.mainVideo.srcObject = this.remoteMovieStream;
-        this.mainVideo.setAttribute('playsinline', '');
-        this.mainVideo.setAttribute('webkit-playsinline', '');
-        this.mainVideo.muted = true; // Crucial for iOS Safari auto-playback!
+      // Re-assign srcObject so browser media engine immediately picks up the new video track
+      this.mainVideo.removeAttribute('src');
+      this.mainVideo.srcObject = this.remoteMovieStream;
+      this.mainVideo.playsInline = true;
+      this.mainVideo.muted = true; // Start muted to bypass browser autoplay blocks
 
-        const playPromise = this.mainVideo.play();
-        if (playPromise !== undefined) {
-          playPromise.then(() => {
-            console.log('[Movie WebRTC] Live stream started playing on iOS Safari');
-            if (this.callbacks.onAutoplayPrompt) {
-              this.callbacks.onAutoplayPrompt();
-            }
-          }).catch((err) => {
-            console.warn('[Movie WebRTC] Safari initial play note:', err);
-            this.mainVideo.muted = true;
-            this.mainVideo.play().catch(() => {});
-            if (this.callbacks.onAutoplayPrompt) {
-              this.callbacks.onAutoplayPrompt();
-            }
-          });
-        }
+      const playPromise = this.mainVideo.play();
+      if (playPromise !== undefined) {
+        playPromise.then(() => {
+          console.log('[Movie WebRTC] Live stream started rendering frames successfully');
+          if (this.callbacks.onAutoplayPrompt) {
+            this.callbacks.onAutoplayPrompt();
+          }
+        }).catch((err) => {
+          console.warn('[Movie WebRTC] Play deferred note:', err);
+          if (this.callbacks.onAutoplayPrompt) {
+            this.callbacks.onAutoplayPrompt();
+          }
+        });
       }
 
       // Hide standby overlay immediately when remote track arrives
@@ -607,13 +608,11 @@ class MovieStreamManager {
       await this.flushIceCandidateQueue();
 
       const answer = await this.moviePC.createAnswer();
-      const sdpString = preferH264(answer.sdp);
-      const modAnswer = new RTCSessionDescription({ type: answer.type, sdp: sdpString });
-      await this.moviePC.setLocalDescription(modAnswer);
+      await this.moviePC.setLocalDescription(answer);
 
       this.socket.emit('movie-signal-answer', {
         targetId: senderId,
-        sdp: modAnswer
+        sdp: answer
       });
     } catch (err) {
       console.error('[Movie WebRTC] Error handling movie offer:', err);
