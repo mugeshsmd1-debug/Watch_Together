@@ -244,7 +244,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   window.addEventListener('click', triggerAutoplayResume, { passive: true });
   window.addEventListener('touchstart', triggerAutoplayResume, { passive: true });
 
-  // WebRTC Instance
+  // WebRTC Instance (WhatsApp/Instagram Style Video Call)
   webrtc = new WebRTCManager(socket, (remoteStream) => {
     remoteVideo.srcObject = remoteStream;
     remoteVideo.playsInline = true;
@@ -258,8 +258,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         showAutoplayPrompt();
       });
     }
-    remoteBubble.classList.remove('cam-off');
-    showToast('Friend connected video stream! 📹', '🎉');
+    remoteBubble.classList.remove('hidden');
+    const hasActiveVideo = remoteStream.getVideoTracks().some(t => t.enabled);
+    if (hasActiveVideo) {
+      remoteBubble.classList.remove('cam-off');
+    }
+    showToast('Friend connected to video call! 📹', '🎉');
   });
 
   // Sync Manager Instance
