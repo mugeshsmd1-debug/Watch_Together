@@ -321,14 +321,13 @@ class WebRTCManager {
     if (!this.peerConnection || this.peerConnection.signalingState !== 'stable') return;
     try {
       console.log('[WebRTC Camera] Creating offer for:', remotePeerId);
+      setTransceiverCodecPreferences(this.peerConnection);
       const offer = await this.peerConnection.createOffer();
-      const sdpString = preferH264(offer.sdp);
-      const modOffer = new RTCSessionDescription({ type: offer.type, sdp: sdpString });
-      await this.peerConnection.setLocalDescription(modOffer);
+      await this.peerConnection.setLocalDescription(offer);
 
       this.socket.emit('signal-offer', {
         targetId: remotePeerId,
-        sdp: modOffer
+        sdp: offer
       });
     } catch (err) {
       console.error('[WebRTC Camera] Error creating offer:', err);
@@ -348,13 +347,11 @@ class WebRTCManager {
       this.attachLocalTracksToPeer();
 
       const answer = await this.peerConnection.createAnswer();
-      const sdpString = preferH264(answer.sdp);
-      const modAnswer = new RTCSessionDescription({ type: answer.type, sdp: sdpString });
-      await this.peerConnection.setLocalDescription(modAnswer);
+      await this.peerConnection.setLocalDescription(answer);
 
       this.socket.emit('signal-answer', {
         targetId: senderId,
-        sdp: modAnswer
+        sdp: answer
       });
     } catch (err) {
       console.error('[WebRTC Camera] Error handling offer:', err);
