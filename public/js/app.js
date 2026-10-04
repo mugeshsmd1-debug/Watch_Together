@@ -586,6 +586,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         setTimeout(() => {
           movieStream.initiateMoviePeerConnection(peer.id);
         }, 500);
+      } else {
+        setTimeout(() => {
+          console.log('[Room Join] Requesting active movie stream from peer:', peer.id);
+          socket.emit('movie-stream-request', { targetId: peer.id });
+        }, 600);
       }
     } else {
       remoteTagName.textContent = 'Waiting for friend...';
