@@ -1,21 +1,21 @@
 /**
- * MovieStreamManager — High Performance WebRTC Movie & Screen Streaming
- * Enables ONE device (Host or Room Member) to stream local movie files,
- * screen shares, or preloaded media directly to the other device(s) in real-time.
- * The other device watches the live synchronized stream without needing any movie file!
+ * MovieStreamManager — Google Meet Style Live Movie & Screen Streaming
+ * One device streams their movie file, screen share, or sample video.
+ * Other devices in the room simply watch the live stream in real-time.
+ * No synchronization pulses or dual-file seeking needed — exactly like Google Meet / Discord screenshare.
  */
 class MovieStreamManager {
   constructor(socket, mainVideoElement, callbacks = {}) {
     this.socket = socket;
     this.mainVideo = mainVideoElement;
-    this.callbacks = callbacks; // onStreamStateChange, onToast, onAutoplayPrompt, onProgressUpdate
+    this.callbacks = callbacks; // onStreamStateChange, onToast, onAutoplayPrompt
 
     this.isStreamer = false;
     this.isWatching = false;
     this.streamerId = null;
     this.streamerName = '';
     this.streamTitle = '';
-    this.streamType = 'file'; // 'file' | 'screen' | 'sample' | 'url'
+    this.streamType = 'file'; // 'file' | 'screen' | 'sample'
 
     this.localMovieStream = null;
     this.remoteMovieStream = null;
@@ -26,7 +26,6 @@ class MovieStreamManager {
     this.audioContext = null;
     this.audioSourceNode = null;
     this.audioDestNode = null;
-    this.progressInterval = null;
 
     // WebRTC STUN/TURN configuration
     this.rtcConfig = {
@@ -74,14 +73,14 @@ class MovieStreamManager {
       await this.handleMovieIce(candidate);
     });
 
-    // When someone starts streaming, watcher immediately requests stream
+    // When someone starts streaming, watcher updates UI and requests the live stream
     this.socket.on('movie-stream-started', (data) => {
       console.log('[Movie Stream] Friend started streaming:', data);
       this.isWatching = true;
       this.isStreamer = false;
       this.streamerId = data.streamerId;
       this.streamerName = data.streamerName || 'Friend';
-      this.streamTitle = data.title || 'Movie';
+      this.streamTitle = data.title || 'Live Stream';
       this.streamType = data.streamType || 'file';
 
       if (this.callbacks.onStreamStateChange) {
@@ -95,11 +94,10 @@ class MovieStreamManager {
       }
 
       if (this.callbacks.onToast) {
-        this.callbacks.onToast(`🔴 ${this.streamerName} is now streaming "${this.streamTitle}" to the room!`, '🍿');
+        this.callbacks.onToast(`🔴 ${this.streamerName} is now streaming "${this.streamTitle}"!`, '🍿');
       }
 
-      // Request live stream directly from streamer!
-      console.log('[Movie Stream] Requesting movie stream from streamer:', data.streamerId);
+      // Request stream from streamer
       this.socket.emit('movie-stream-request', {
         targetId: data.streamerId
       });
@@ -113,25 +111,13 @@ class MovieStreamManager {
       }
     });
 
-    this.socket.on('movie-stream-stopped', ({ streamerId }) => {
-      console.log('[Movie Stream] Streamer stopped streaming:', streamerId);
+    this.socket.on('movie-stream-stopped', () => {
+      console.log('[Movie Stream] Streamer stopped streaming');
       if (this.isWatching) {
         this.stopWatching();
         if (this.callbacks.onToast) {
-          this.callbacks.onToast('Movie stream ended', '🎬');
+          this.callbacks.onToast('Live movie stream ended', '🎬');
         }
-      }
-    });
-
-    this.socket.on('movie-control-action', (action) => {
-      if (this.isStreamer) {
-        this.applyRemoteControlAction(action);
-      }
-    });
-
-    this.socket.on('movie-progress-update', (data) => {
-      if (this.isWatching && this.callbacks.onProgressUpdate) {
-        this.callbacks.onProgressUpdate(data);
       }
     });
   }
@@ -155,7 +141,7 @@ class MovieStreamManager {
       this.mainVideo.muted = false;
 
       await this.mainVideo.play().catch((err) => {
-        console.warn('Initial play requires user gesture:', err);
+        console.warn('Initial play note:', err);
       });
 
       // Wait until metadata/frames are ready before capturing
@@ -184,9 +170,7 @@ class MovieStreamManager {
         throw new Error('captureStream is not supported by your browser for direct video capture.');
       }
 
-      // Setup Web Audio routing so stereo sound is captured into WebRTC
       this.setupAudioCapture(this.mainVideo, stream);
-
       this.localMovieStream = stream;
 
       // Announce stream to room
@@ -194,8 +178,6 @@ class MovieStreamManager {
         title: this.streamTitle,
         streamType: 'file'
       });
-
-      this.startProgressBroadcasting();
 
       if (this.callbacks.onStreamStateChange) {
         this.callbacks.onStreamStateChange({
@@ -222,7 +204,7 @@ class MovieStreamManager {
   }
 
   /**
-   * 2. Start streaming Screen / Tab / Window (YouTube, VLC, browser tabs)
+   * 2. Start streaming Screen / Tab / Window (Google Meet style)
    */
   async startScreenStream(activePeerId = null) {
     try {
@@ -245,15 +227,14 @@ class MovieStreamManager {
       this.isStreamer = true;
       this.isWatching = false;
 
-      // Show screen stream in main video stage (muted locally to avoid local echo)
       this.mainVideo.src = '';
       this.mainVideo.srcObject = screenStream;
-      this.mainVideo.muted = true;
+      this.mainVideo.muted = true; // Mute locally to prevent microphone loopback
       await this.mainVideo.play().catch(() => {});
 
       this.localMovieStream = screenStream;
 
-      // When user clicks the browser's native "Stop sharing" button
+      // Listen for browser "Stop sharing" bar
       const videoTrack = screenStream.getVideoTracks()[0];
       if (videoTrack) {
         videoTrack.onended = () => {
@@ -262,7 +243,6 @@ class MovieStreamManager {
         };
       }
 
-      // Announce to room
       this.socket.emit('movie-stream-started', {
         title: this.streamTitle,
         streamType: 'screen'
@@ -284,31 +264,31 @@ class MovieStreamManager {
 
       return true;
     } catch (err) {
-      console.warn('Screen sharing cancelled or unavailable:', err);
+      console.warn('Screen share cancelled or not allowed:', err);
       return false;
     }
   }
 
   /**
-   * 3. Start streaming a sample or preloaded movie
+   * 3. Start streaming sample movie (Big Buck Bunny)
    */
-  async startSampleStream(src, title, activePeerId = null) {
-    if (!src) return;
+  async startSampleStream(activePeerId = null) {
     try {
       this.stopStream(false);
 
-      this.streamTitle = title || 'Movie';
+      const sampleUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
+      this.streamTitle = 'Big Buck Bunny (Sample HD)';
       this.streamType = 'sample';
       this.isStreamer = true;
       this.isWatching = false;
 
-      this.mainVideo.srcObject = null;
       this.mainVideo.crossOrigin = 'anonymous';
-      this.mainVideo.src = src;
+      this.mainVideo.srcObject = null;
+      this.mainVideo.src = sampleUrl;
       this.mainVideo.muted = false;
 
       await this.mainVideo.play().catch((err) => {
-        console.warn('Play blocked:', err);
+        console.warn('Sample video play note:', err);
       });
 
       if (this.mainVideo.readyState < 2) {
@@ -338,8 +318,6 @@ class MovieStreamManager {
         title: this.streamTitle,
         streamType: 'sample'
       });
-
-      this.startProgressBroadcasting();
 
       if (this.callbacks.onStreamStateChange) {
         this.callbacks.onStreamStateChange({
@@ -407,29 +385,6 @@ class MovieStreamManager {
   }
 
   /**
-   * Periodic progress broadcast to watcher
-   */
-  startProgressBroadcasting() {
-    this.stopProgressBroadcasting();
-    this.progressInterval = setInterval(() => {
-      if (this.isStreamer && this.mainVideo && this.streamType !== 'screen') {
-        this.socket.emit('movie-progress-update', {
-          currentTime: this.mainVideo.currentTime || 0,
-          duration: this.mainVideo.duration || 0,
-          isPlaying: !this.mainVideo.paused
-        });
-      }
-    }, 600);
-  }
-
-  stopProgressBroadcasting() {
-    if (this.progressInterval) {
-      clearInterval(this.progressInterval);
-      this.progressInterval = null;
-    }
-  }
-
-  /**
    * WebRTC: Streamer initiates connection to Watcher peer
    */
   async initiateMoviePeerConnection(remotePeerId) {
@@ -463,7 +418,7 @@ class MovieStreamManager {
       console.log('[Movie WebRTC] Streamer PC state:', this.moviePC.connectionState);
       if (this.moviePC.connectionState === 'connected') {
         if (this.callbacks.onToast) {
-          this.callbacks.onToast('Friend is now watching your movie stream! 🍿', '📡');
+          this.callbacks.onToast('Friend is now watching your stream! 🍿', '📡');
         }
       }
     };
@@ -532,8 +487,9 @@ class MovieStreamManager {
         this.callbacks.onStreamStateChange({
           isStreamer: false,
           isWatching: true,
-          streamerName: this.streamerName,
-          title: this.streamTitle
+          streamerName: this.streamerName || 'Friend',
+          title: this.streamTitle || 'Movie Stream',
+          streamType: this.streamType
         });
       }
     };
@@ -568,13 +524,10 @@ class MovieStreamManager {
         sdp: answer
       });
     } catch (err) {
-      console.error('[Movie WebRTC] Error answering movie offer:', err);
+      console.error('[Movie WebRTC] Error handling movie offer:', err);
     }
   }
 
-  /**
-   * WebRTC: Streamer handles answer from Watcher
-   */
   async handleMovieAnswer(sdp) {
     try {
       if (this.moviePC && this.moviePC.signalingState === 'have-local-offer') {
@@ -582,13 +535,10 @@ class MovieStreamManager {
         await this.flushIceCandidateQueue();
       }
     } catch (err) {
-      console.error('[Movie WebRTC] Error setting remote answer:', err);
+      console.error('[Movie WebRTC] Error setting remote description for answer:', err);
     }
   }
 
-  /**
-   * WebRTC: Handle ICE candidates
-   */
   async handleMovieIce(candidate) {
     if (!candidate) return;
     try {
@@ -598,7 +548,7 @@ class MovieStreamManager {
       }
       await this.moviePC.addIceCandidate(new RTCIceCandidate(candidate));
     } catch (err) {
-      console.warn('[Movie WebRTC] ICE candidate note:', err);
+      console.warn('[Movie WebRTC] Error adding ICE candidate:', err);
     }
   }
 
@@ -608,41 +558,13 @@ class MovieStreamManager {
       try {
         await this.moviePC.addIceCandidate(new RTCIceCandidate(candidate));
       } catch (err) {
-        console.warn('Flush ICE candidate note:', err);
+        console.warn('[Movie WebRTC] Failed to flush ICE candidate:', err);
       }
     }
   }
 
   /**
-   * Controls: Watcher requests play/pause or seek
-   */
-  sendControlAction(type, currentTime = 0) {
-    if (this.isWatching) {
-      this.socket.emit('movie-control-action', {
-        type,
-        currentTime
-      });
-    }
-  }
-
-  /**
-   * Controls: Streamer applies control action requested by Watcher
-   */
-  applyRemoteControlAction(action) {
-    if (!this.isStreamer || !this.mainVideo) return;
-    console.log('[Movie Stream] Applying remote control action from watcher:', action);
-
-    if (action.type === 'play') {
-      this.mainVideo.play().catch(() => {});
-    } else if (action.type === 'pause') {
-      this.mainVideo.pause();
-    } else if (action.type === 'seek') {
-      this.mainVideo.currentTime = action.currentTime;
-    }
-  }
-
-  /**
-   * Stop watching remote stream
+   * Stop Watching remote stream
    */
   stopWatching() {
     this.isWatching = false;
@@ -655,8 +577,9 @@ class MovieStreamManager {
       this.moviePC = null;
     }
 
-    if (this.mainVideo.srcObject) {
+    if (this.mainVideo) {
       this.mainVideo.srcObject = null;
+      this.mainVideo.src = '';
     }
 
     if (this.callbacks.onStreamStateChange) {
@@ -668,12 +591,13 @@ class MovieStreamManager {
   }
 
   /**
-   * Stop streaming (Streamer side)
+   * Stop Streaming local movie or screen share
    */
-  stopStream(broadcast = true) {
-    const wasStreamer = this.isStreamer;
+  stopStream(notifyPeers = true) {
+    if (!this.isStreamer && !this.isWatching) return;
+
     this.isStreamer = false;
-    this.stopProgressBroadcasting();
+    this.isWatching = false;
 
     if (this.localMovieStream) {
       this.localMovieStream.getTracks().forEach((track) => track.stop());
@@ -685,12 +609,14 @@ class MovieStreamManager {
       this.moviePC = null;
     }
 
-    if (broadcast && wasStreamer) {
-      this.socket.emit('movie-stream-stopped');
+    if (this.mainVideo) {
+      this.mainVideo.pause();
+      this.mainVideo.srcObject = null;
+      this.mainVideo.src = '';
     }
 
-    if (this.mainVideo.srcObject) {
-      this.mainVideo.srcObject = null;
+    if (notifyPeers) {
+      this.socket.emit('movie-stream-stopped', {});
     }
 
     if (this.callbacks.onStreamStateChange) {
@@ -698,6 +624,10 @@ class MovieStreamManager {
         isStreamer: false,
         isWatching: false
       });
+    }
+
+    if (this.callbacks.onToast) {
+      this.callbacks.onToast('Stream stopped', '⏹️');
     }
   }
 }
