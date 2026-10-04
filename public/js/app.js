@@ -575,6 +575,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       activePeerId = peer.id;
       remoteTagName.textContent = peer.name;
       remoteFallback.textContent = peer.name.charAt(0).toUpperCase();
+      remoteBubble.classList.remove('hidden');
 
       const myId = socket.isVercel && socket.supabaseRoom ? socket.supabaseRoom.userId : (socket.id || '');
       const isInitiator = Boolean(myId && peer.id && myId < peer.id);
@@ -588,6 +589,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     } else {
       remoteTagName.textContent = 'Waiting for friend...';
+      remoteBubble.classList.add('hidden');
     }
   });
 
@@ -597,6 +599,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     activePeerId = user.id;
     remoteTagName.textContent = user.name;
     remoteFallback.textContent = user.name.charAt(0).toUpperCase();
+    remoteBubble.classList.remove('hidden');
 
     // Polite Peer pattern: peer with smaller ID initiates WebRTC offer
     const myId = socket.isVercel && socket.supabaseRoom ? socket.supabaseRoom.userId : (socket.id || '');
@@ -629,7 +632,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     remoteTagName.textContent = 'Waiting for friend...';
     remoteVideo.srcObject = null;
-    remoteBubble.classList.add('cam-off');
+    remoteBubble.classList.add('hidden');
 
     if (movieStream && movieStream.isWatching && movieStream.streamerId === userId) {
       movieStream.stopWatching();
@@ -651,49 +654,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     webrtc.handleIceCandidate(candidate);
   });
 
-  // Socket: Peer Media State Changed
+  // Socket: Peer Media State Changed (WhatsApp/Instagram Video Call state updates)
   socket.on('user-media-state-changed', ({ audioEnabled, videoEnabled }) => {
     if (audioEnabled !== undefined) {
-      if (audioEnabled) {
-        remoteBubble.classList.remove('mic-muted');
-      } else {
-        remoteBubble.classList.add('mic-muted');
-      }
+      remoteBubble.classList.toggle('mic-muted', !audioEnabled);
     }
     if (videoEnabled !== undefined) {
+      remoteBubble.classList.toggle('cam-off', !videoEnabled);
       if (videoEnabled) {
-        remoteBubble.classList.remove('cam-off');
-      } else {
-        remoteBubble.classList.add('cam-off');
+        remoteVideo.play().catch(() => {});
       }
     }
   });
-
-  // Socket: Video Sync Actions
-  socket.on('video-sync', (action) => {
-    console.log('Handling video-sync action:', action);
-    if (movieStream && movieStream.isWatching) {
-      // In live stream mode, video playback and audio are streamed directly via WebRTC
-      return;
-    }
-    syncManager.handleSyncAction(action);
-  });
-
-  socket.on('sync-pulse-echo', (pulse) => {
-    const myId = socket.isVercel && socket.supabaseRoom ? socket.supabaseRoom.userId : socket.id;
-    if (pulse.senderId !== myId) {
-      syncManager.handleSyncPulse(pulse);
-    }
-  });
-
-  setInterval(() => {
-    if (currentRoomId && !mainVideo.paused && currentUser) {
-      socket.emit('sync-pulse', {
-        currentTime: mainVideo.currentTime,
-        isPlaying: !mainVideo.paused
-      });
-    }
-  }, 2000);
 
   // Socket: Live Chat
   function appendChatMessage(msg) {
